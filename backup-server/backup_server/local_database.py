@@ -77,7 +77,6 @@ class LocalDatabase:
         return cls(base_path)
 
 
-
 class LocalDatabaseServerSession(protocol.ServerSession):
 
     _BACKUPS = 'backup'

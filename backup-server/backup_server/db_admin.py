@@ -102,9 +102,14 @@ def backup(database: LocalDatabase,  client_name: str, timestamp: datetime, desc
         logger.info(f"Backup - {backup_session}")
 
         backup_scanner = scanner.Scanner(backup_session, server_session)
-        await backup_scanner.scan_all()
-        logger.info("Finalizing backup")
-        await backup_session.complete()
-        logger.info("All done.")
+        try:
+            await backup_scanner.scan_all()
+            logger.info("Finalizing backup")
+            await backup_session.complete()
+            logger.info("All done")
+        except Exception:
+            logger.info("Discarding session due to error")
+            await backup_session.discard()
+            raise
 
     asyncio.get_event_loop().run_until_complete(_backup())
