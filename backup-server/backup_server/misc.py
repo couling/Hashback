@@ -1,10 +1,9 @@
 import logging
 import json
 import os
-import inspect
 
 
-def setup_logging():
+def setup_logging(default_level: int):
     """
     Setup logging for the program.  Rather than using program arguments this will interpret two environment variables
     to set log levels.  Both may be blank in which case the program will log at DEBUG level.  Note that some libraries
@@ -18,10 +17,15 @@ def setup_logging():
     program run what is supposed to be in the log without it getting switched off by fine grained logging.
     """
     # Find the default log level from environment variable
-    default_level_name = os.environ.get("LOG_LEVEL", "INFO")
-    default_level = logging.getLevelName(default_level_name)
-    if not isinstance(default_level, int):
-        default_level = logging.DEBUG
+    try:
+        default_level_name = os.environ["LOG_LEVEL"]
+        new_default_level = logging.getLevelName(default_level_name)
+        if isinstance(default_level, int):
+            default_level = new_default_level
+        else:
+            default_level_name = logging.getLevelName(default_level)
+    except KeyError:
+        default_level_name = logging.getLevelName(default_level)
 
     logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=default_level)
 
