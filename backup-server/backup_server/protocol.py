@@ -270,9 +270,10 @@ def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta):
     Normalize a backup date to the given granularity. EG if granularity is set to 1 day, the backup_date is set to
     midnight of that same day.  If granularity is set to 1 hour, then backup_date is set to the start of that hour.
     """
+    assert backup_date.tzinfo is not None
     timestamp = backup_date.timestamp()
     timestamp -= timestamp % backup_granularity.total_seconds()
-    return datetime.fromtimestamp(timestamp) - timedelta(days=128)
+    return datetime.fromtimestamp(timestamp, timezone.utc)
 
 
 def hash_content(content: Union[bytes, str, BinaryIO]) -> str:

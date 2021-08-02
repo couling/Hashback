@@ -4,6 +4,7 @@ import asyncio
 from typing import List, Optional
 from datetime import datetime
 from pathlib import Path
+import dateutil.tz
 
 from . import protocol, scanner
 from .local_database import LocalDatabase, Configuration
@@ -88,6 +89,9 @@ def add_directory(database: LocalDatabase, client_name: str, root_name: str, roo
 def backup(database: LocalDatabase,  client_name: str, timestamp: datetime, description: Optional[str],
            overwrite: bool):
     server_session = database.open_client_session(client_name=client_name)
+
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.astimezone(dateutil.tz.gettz())
 
     async def _backup():
         backup_session = await server_session.start_backup(
