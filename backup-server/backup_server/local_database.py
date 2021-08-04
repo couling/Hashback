@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class Configuration(BaseModel):
     store_split_count = 1
+    store_split_size = 2
 
 
 class BackupSessionConfig(BaseModel):
@@ -54,7 +55,9 @@ class LocalDatabase:
         return LocalDatabaseServerSession(self, client_path)
 
     def store_path_for(self, ref_hash: str) -> Path:
-        split = (ref_hash[x:x+2] for x in range(0, self.config.store_split_count * 2, 2))
+        split_size = self.config.store_split_size
+        split_count = self.config.store_split_count
+        split = [ref_hash[x:x+split_size] for x in range(0, split_count * split_size, split_size)]
         return self._base_path.joinpath(self._STORE_DIR, *split, ref_hash)
 
     def create_client(self, client_config: protocol.ClientConfiguration) -> protocol.ServerSession:
@@ -192,7 +195,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     _ROOTS = 'roots'
 
     def __init__(self, client_session: LocalDatabaseServerSession, session_path: Path):
-        self._client_session = client_session
+        self._server_session = client_session
         self._session_path = session_path
         with (session_path / _CONFIG_FILE).open('r') as file:
             self._config = BackupSessionConfig.parse_raw(file.read())
@@ -278,11 +281,11 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         return self._temp_path(resume_id).stat().st_size
 
     async def complete(self) -> None:
-        logger.info(f"Committing {self._session_path.name} for {self._client_session.client_config.client_name} "
-                    f"({self._client_session.client_config.client_id}) - {self._config.backup_date}")
+        logger.info(f"Committing {self._session_path.name} for {self._server_session.client_config.client_name} "
+                    f"({self._server_session.client_config.client_id}) - {self._config.backup_date}")
         for file_path in (self._session_path / self._NEW_OBJECTS).iterdir():
             try:
-                target_path = self._client_session._database.store_path_for(file_path.name)
+                target_path = self._server_session._database.store_path_for(file_path.name)
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 logger.debug(f"Moving {file_path.name} to store")
                 file_path.rename(target_path)
@@ -293,15 +296,15 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             with file_path.open('r') as file:
                 roots[file_path.name] = protocol.Inode.parse_raw(file.read())
         backup_meta = protocol.Backup(
-            client_id=self._client_session.client_config.client_id,
-            client_name=self._client_session.client_config.client_name,
+            client_id=self._server_session.client_config.client_id,
+            client_name=self._server_session.client_config.client_name,
             backup_date=self._config.backup_date,
             started=self._config.started,
             completed=datetime.now(timezone.utc),
             description=self._config.description,
             roots=roots,
         )
-        self._client_session.complete_backup(backup_meta, self._config.allow_overwrite)
+        self._server_session.complete_backup(backup_meta, self._config.allow_overwrite)
         await self.discard()
 
     async def discard(self) -> None:
@@ -309,7 +312,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         shutil.rmtree(self._session_path)
 
     def _object_exists(self, ref_hash: str) -> bool:
-        return (self._client_session._database.store_path_for(ref_hash).exists()
+        return (self._server_session._database.store_path_for(ref_hash).exists()
                 or self._store_path_for(ref_hash).exists())
 
     def _store_path_for(self, ref_hash: str) -> Path:
@@ -322,3 +325,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
 
     def _new_object_path_for(self, ref_hash: str) -> Path:
         return self._session_path / self._NEW_OBJECTS / ref_hash
+
+    @property
+    def server_session(self) -> protocol.ServerSession:
+        return self._server_session

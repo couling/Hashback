@@ -1,9 +1,17 @@
 import logging
 import json
 import os
+import signal
+import asyncio
+from typing import Union, Optional, Coroutine, Collection
+from pathlib import Path
+
+import click
+
+logger = logging.getLogger(__name__)
 
 
-def setup_logging(default_level: int):
+def setup_logging(default_level: int = logging.INFO):
     """
     Setup logging for the program.  Rather than using program arguments this will interpret two environment variables
     to set log levels.  Both may be blank in which case the program will log at DEBUG level.  Note that some libraries
@@ -31,8 +39,8 @@ def setup_logging(default_level: int):
 
     # We can't log anything before logging.basicConfig so we have to check it again after and log the message here
     if not isinstance(logging.getLevelName(default_level_name), int):
-        logging.warning(f"Unknown log level name {default_level_name} in LOG_LEVEL")
-    logging.info(f"Logging configured to default level {logging.getLevelName(default_level)}")
+        logger.warning(f"Unknown log level name {default_level_name} in LOG_LEVEL")
+    logger.debug(f"Logging configured to default level {logging.getLevelName(default_level)}")
 
     # If there's LOG_LEVELS environment variable, use it to set fine grained levels.
     try:
@@ -41,9 +49,47 @@ def setup_logging(default_level: int):
         return
 
     for logger_name, level_name in log_levels.items():
-        log_level = logging.getLevelName(level_name)
+        log_level = logger.getLevelName(level_name)
         if not isinstance(log_level, int):
-            logging.warning(f"Unknown log level name {level_name} in LOG_LEVELS")
+            logger.warning(f"Unknown log level name {level_name} in LOG_LEVELS")
         else:
             logging.getLogger(logger_name).level = log_level
-            logging.info(f"Logging for '{logger_name}' set to {logging.getLevelName(log_level)}")
+            logger.debug(f"Logging for '{logger_name}' set to {logging.getLevelName(log_level)}")
+
+
+def clean_shutdown(num, _):
+    """
+    Intended to be used as a signal handler
+    """
+    logger.error(f"Caught signal '{signal.Signals(num).name}' - Shutting down")
+    raise KeyboardInterrupt(f"Signal '{signal.Signals(num).name}'")
+
+
+def run_then_cancel(future: Optional[Union[asyncio.Future, Coroutine]] = None,
+                    loop: Optional[asyncio.BaseEventLoop] = None):
+    if loop is None:
+        loop = asyncio.get_event_loop()
+    try:
+        if future is None:
+            return loop.run_forever()
+        else:
+            return loop.run_until_complete(future)
+    finally:
+        # There can still be running tasks on the event loop at this point.
+        # Either 'future' has completed but other tasks on the loop have not, or some exception tripped us out of
+        # running the loop.
+        # Whatever the reason we want to cleanly cancel all remaining tasks (that's the point of this function).
+        # To do that we MUST run the event loop after cancelling every task
+        all_tasks = asyncio.all_tasks(loop)
+        for task in all_tasks:
+            task.cancel()
+        loop.run_until_complete(asyncio.gather(*all_tasks, return_exceptions=True))
+
+
+def register_clean_shutdown(numbers: Collection[Union[int, signal.Signals]] = (signal.SIGINT, signal.SIGTERM)):
+    for num in numbers:
+        signal.signal(num, clean_shutdown)
+
+
+def str_exception(exception: Exception):
+    return str(exception) or str(type(exception).__name__)

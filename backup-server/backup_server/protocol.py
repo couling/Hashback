@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple
 from uuid import UUID, uuid4
 from pathlib import Path
-from abc import abstractmethod
+from abc import abstractmethod, abstractproperty
 from pydantic import BaseModel, Field
 
 
@@ -62,11 +62,6 @@ class Inode(BaseModel):
             modified_time=datetime.fromtimestamp(s.st_mtime),
             hash=hash_value,
         )
-
-    @classmethod
-    def from_file_path(cls, path: Path, hash_value: Optional[str] = None) -> "Inode":
-        s = path.stat()
-        return cls.from_stat(s, hash_value)
 
 
 class Directory(BaseModel):
@@ -202,6 +197,13 @@ class BackupSession(Protocol):
         Delete this partial backup entirely.  This cannot be undone.  All uploads etc will be discarded from the server.
         """
 
+    @property
+    @abstractmethod
+    def server_session(self) -> "ServerSession":
+        """
+        The server session this is attached to
+        """
+
 
 class ServerSession(Protocol):
     client_config: ClientConfiguration
@@ -276,7 +278,7 @@ def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta):
     return datetime.fromtimestamp(timestamp, timezone.utc)
 
 
-def hash_content(content: Union[bytes, str, BinaryIO]) -> str:
+def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
     """
     Generate an sha256sum for the given content
     """
@@ -285,6 +287,12 @@ def hash_content(content: Union[bytes, str, BinaryIO]) -> str:
         h.update(content)
     elif isinstance(content, str):
         h.update(content.encode("utf-8"))
+    elif isinstance(content, Path):
+        with content.open('rb') as file:
+            bytes_read = file.read(409600)
+            while bytes_read:
+                h.update(bytes_read)
+                bytes_read = file.read(409600)
     else:
         bytes_read = content.read(409600)
         while bytes_read:

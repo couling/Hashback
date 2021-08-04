@@ -1,6 +1,7 @@
 from typing import Optional
 import os
 import logging
+import stat
 from pathlib import Path
 from datetime import datetime
 from uuid import uuid4
@@ -29,26 +30,42 @@ class _NormalizedFilter:
 
 class Scanner:
 
-    def __init__(self, backup_session: protocol.BackupSession, database: Optional[protocol.ServerSession]):
+    def __init__(self, backup_session: protocol.BackupSession):
         self.all_files = {}
-        self._session = backup_session
-        self._database = database
+        self.backup_session = backup_session
 
-    async def scan_all(self, client_config: protocol.ClientConfiguration = None,
-                       ref_last_scan: Optional[datetime] = None):
+    async def scan_all(self, backup_directories: Optional[Dict[str, protocol.ClientConfiguredBackupDirectory]] = None,
+                       fast_unsafe: bool = False):
         """
         Scan all directories.
-        :param client_config: Override the client config.  If None use the one stored in the database.
-        :param ref_last_scan: Override the last scan date.  If None the database will decide which to use
-            (likely the most recent).
+        :param backup_directories: The directories to backup.  If not, this will be pulled from the client's server.
+        :param fast_unsafe: Compare meta-data to the previous backup stored on the same server.  This can be much faster
+            But it is "unsafe" because it does not check the file content.  Theoretically content can change without
+            changing the timestamp or size.  It's rare, but it could theoretically happen.
         """
-        if client_config is None:
-            client_config = self._database.client_config
-        for name, scan_spec in client_config.backup_directories.items():
-            await self.scan_root(name, scan_spec, ref_last_scan)
+        if backup_directories is None:
+            backup_directories = self.backup_session.server_session.client_config.backup_directories
+        if fast_unsafe:
+            last_backup_roots = (await self.backup_session.server_session.get_backup()).roots
+        else:
+            last_backup_roots = {}
+
+        # Scans are internally parallelized.  Let's not gather() this one so we have some opportunity to understand
+        # what it was doing if it failed.
+        if fast_unsafe:
+            logger.warning("Comparing meta data to last backup, will not check content for existing files.")
+            for name, scan_spec in backup_directories.items():
+                last_backup = last_backup_roots.get(name)
+                if last_backup is None:
+                    logger.warning(f"Directory '{name}' not in last backup")
+                await self.scan_root(root_name=name, scan_spec=scan_spec, last_backup=last_backup)
+        else:
+            logger.info("Ignoring last backup, will hash every file")
+            for name, scan_spec in backup_directories.items():
+                await self.scan_root(root_name=name, scan_spec=scan_spec)
 
     async def scan_root(self, root_name: str, scan_spec: protocol.ClientConfiguredBackupDirectory,
-                        ref_last_scan: Optional[datetime] = None):
+                        last_backup: Optional[protocol.Directory] = None):
         path = Path(scan_spec.base_path)
         if not path.is_absolute():
             raise ValueError(f"{root_name} path is not absolute: {path}")
@@ -56,19 +73,8 @@ class Scanner:
         logger.info(f"Backing up '{root_name}' ({path})")
         if not path.is_dir():
             logger.error(f"Not a valid directory {root_name}: {str(path)}")
-        if self._database is not None:
-            last_backup = await self._database.get_backup(backup_date=ref_last_scan)
-            if last_backup is None or root_name not in last_backup.roots:
-                logger.warning(f"No backup found for '{root_name}' executing full scan")
-                last_backup = None
-            else:
-                logger.debug(f"Using backup dated {last_backup.backup_date} completed at {last_backup.completed}")
-                last_backup = last_backup.roots[root_name]
-        else:
-            logger.info("Executing full scan with no attempt to find a last backup")
-            last_backup = None
         inode = await self._scan_inode(path, last_backup, filters)
-        await self._session.add_root_dir(root_name, inode)
+        await self.backup_session.add_root_dir(root_name, inode)
 
     async def _scan_inode(self, path: Path, last_scan: Optional[protocol.Inode], filters: Optional[_NormalizedFilter]
                           ) -> protocol.Inode:
@@ -91,7 +97,9 @@ class Scanner:
             raise SkipThis(f"Skipping excluded path {path}")
 
         last_scan_hash = last_scan.hash if last_scan is not None else None
-        inode = protocol.Inode.from_file_path(path, last_scan_hash)
+
+        file_stat = path.stat()
+        inode = protocol.Inode.from_stat(file_stat, last_scan_hash)
 
         if inode.type == protocol.FileType.DIRECTORY:
             directory = await self._scan_directory(path, last_scan, filters)
@@ -100,8 +108,7 @@ class Scanner:
         elif inode.type == protocol.FileType.REGULAR:
             if inode != last_scan:
                 logger.debug(f"Hashing {path}")
-                with path.open('rb') as file:
-                    inode.hash = protocol.hash_content(file)
+                inode.hash = protocol.hash_content(path)
 
         elif inode.type == protocol.FileType.LINK:
             inode.hash = protocol.hash_content(os.readlink(path))
@@ -112,6 +119,11 @@ class Scanner:
         else:
             raise SkipThis(f"Skipping type type is {inode.type} {path}")
 
+        # If this is not a directory then store it in our database of all inodes.
+        # We don't waste memory on storing directories, they cannot be hard linked.
+        if inode.type is not protocol.FileType.DIRECTORY:
+            self.all_files[(file_stat.st_dev, file_stat.st_ino)] = inode
+
         return inode
 
     async def _scan_directory(self, dir_path: Path, last_scan: Optional[protocol.Inode],
@@ -120,40 +132,50 @@ class Scanner:
         Scan a directory, returning the children inodes
         """
         logger.debug(f"Directory {dir_path}")
-        assert dir_path.is_dir()
 
         # Fetch the last scan
         if last_scan is None:
             last_scan_children = {}
         else:
             logger.debug(f"Fetching last_scan {last_scan.hash} for {dir_path}")
-            last_scan_directory = await self._database.read_directory(last_scan)
+            last_scan_directory = await self.backup_session.server_session.read_directory(last_scan)
             last_scan_children = last_scan_directory.children
 
-        children = list(dir_path.iterdir())
         filter_tree = filters.exceptions if filters is not None else {}
 
-        # Create scan task for every child which is not excluded by filter
-        scan_tasks = [
-            self._scan_inode(child_path, last_scan_children.get(child_path.name), filter_tree.get(child_path.name))
-            for child_path in children
-        ]
+        # Check every file to see if we've seen it before.  If not create a task to scan it fully.
+        child_inodes = {}
+        scan_paths = []
+        scan_tasks = []
+        for child in dir_path.iterdir():
+            child_stat = child.stat()
+            try:
+                child_inodes[child.name] = self.all_files[(child_stat.st_dev, child_stat.st_ino)]
+                logger.debug(f"Using previous hardlink for {child}")
+            except KeyError:
+                # Create a task to scan every child, make a note of it's name as this will not be in the result.
+                scan_paths.append(child)
+                scan_tasks.append(self._scan_inode(
+                    path=child,
+                    last_scan=last_scan_children.get(child.name),
+                    filters=filter_tree.get(child.name),
+                ))
 
-        # Run the tasks
-        results = await gather(*scan_tasks, return_exceptions=True)
+        # Run the scan tasks
+        scan_results = await gather(*scan_tasks, return_exceptions=True)
 
-        # Log any failures
-        for child, result in zip(children, results):
+        # Process the results.
+        for child_path, result in zip(scan_paths, scan_results):
+            # If scanning the child raised an exception then just log it and carry on.
+            # The child will just be excluded from the backup
             if isinstance(result, Exception):
                 if isinstance(result, SkipThis):
                     logger.debug(str(result))
                 else:
-                    logger.error(f"Could not scan {child}", exc_info=result)
-
-        # Assemble successful scans into a child dictionary
-        child_inodes = {child_path.name: child_inode
-                        for child_path, child_inode in zip(children, results)
-                        if not isinstance(child_inode, Exception)}
+                    logger.error(f"Could not scan {child_path}", exc_info=result)
+            else:
+                # Add the result of the scan to the dictionary of inodes
+                child_inodes[child_path.name] = result
 
         return protocol.Directory(__root__=child_inodes)
 
@@ -167,25 +189,13 @@ class Scanner:
         logger.debug(f"Uploading directory {path}")
 
         # The directory has changed.  We send the contents over to the server. It will tell us what else it needs.
-        server_response = await self._session.directory_def(directory)
+        server_response = await self.backup_session.directory_def(directory)
         if server_response.missing_files:
             for missing_file in server_response.missing_files:
-                missing_file_path = path / missing_file
-                logger.info(f"Uploading {missing_file_path}")
-                try:
-                    directory.children[missing_file].hash = await self._session.upload_file_content(
-                        file_content=missing_file_path,
-                        resume_id=uuid4(),
-                    )
-                    logger.debug(f"Uploaded {missing_file} - {directory.children[missing_file].hash}")
-                except FileNotFoundError:
-                    logger.error(f"File disappeared before it could be uploaded: {path / missing_file}")
-                    del directory.children[missing_file]
-                except OSError as ex:
-                    logger.error(f"Cannot upload: {path / missing_file} - {str(ex)}")
+                await self._upload_missing_file(path, directory, missing_file)
             # Retry the directory now that all files have been uploaded.  This should never fail.
             # File hashes could have changed and files could have disappeared, so re-hash the directory
-            server_response = await self._session.directory_def(directory, replaces=ref_hash)
+            server_response = await self.backup_session.directory_def(directory, replaces=ref_hash)
             if server_response.missing_files:
                 raise RuntimeError("Second attempt to store a directory on the server failed")
             ref_hash = server_response.ref_hash
@@ -193,6 +203,21 @@ class Scanner:
         else:
             logger.debug(f"Server already has identical copy of {path} as {server_response.ref_hash}")
         return ref_hash
+
+    async def _upload_missing_file(self, path: Path, directory: protocol.Directory, missing_file: str):
+        missing_file_path = path / missing_file
+        logger.info(f"Uploading {missing_file_path}")
+        try:
+            directory.children[missing_file].hash = await self.backup_session.upload_file_content(
+                file_content=missing_file_path,
+                resume_id=uuid4(),
+            )
+            logger.debug(f"Uploaded {missing_file} - {directory.children[missing_file].hash}")
+        except FileNotFoundError:
+            logger.error(f"File disappeared before it could be uploaded: {path / missing_file}")
+            del directory.children[missing_file]
+        except OSError as ex:
+            logger.error(f"Cannot upload: {path / missing_file} - {str(ex)}")
 
 
 def _normalize_filters(filters: List[protocol.Filter]) -> _NormalizedFilter:
