@@ -96,8 +96,8 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         with (self._client_path / _CONFIG_FILE).open('w') as file:
             file.write(self.client_config.json(indent=True))
 
-    async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False, description: Optional[str] = None,
-                           ) -> protocol.BackupSession:
+    async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False,
+                           description: Optional[str] = None) -> protocol.BackupSession:
         backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity)
 
         if not allow_overwrite:
@@ -125,8 +125,14 @@ class LocalDatabaseServerSession(protocol.ServerSession):
             return LocalDatabaseBackupSession(self, backup_path)
 
         elif backup_date is not None:
-            # TODO  This has not yet been implemented
-            raise NotImplementedError("Unable to find backup by date")
+            # This is inefficient if there are a lot of sessions but it get's the job done.
+            backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity)
+            for session_path in (self._client_path / self._SESSIONS).iterdir():
+                session = LocalDatabaseBackupSession(self, session_path)
+                if session.backup_date == backup_date:
+                    return session
+
+            raise protocol.NotFoundException(f"Backup date not found {backup_date}")
 
         raise ValueError("Either session_id or backup_date must be specified but neither were")
 
@@ -176,7 +182,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
             return self._database.store_path_for(inode.hash).open('rb')
 
     def complete_backup(self, meta: protocol.Backup, overwrite: bool):
-        backup_path =  self._path_for_backup_date(meta.backup_date)
+        backup_path = self._path_for_backup_date(meta.backup_date)
         backup_path.parent.mkdir(exist_ok=True, parents=True)
         with backup_path.open('w' if overwrite else 'x') as file:
             file.write(meta.json(indent=True))
@@ -213,10 +219,10 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             if child.hash is None:
                 raise ValueError(f"Child {name} has no hash value")
 
-        content = definition.dump()
-        directory_hash = protocol.hash_content(content)
+        directory_hash, content = definition.hash()
         if self._object_exists(directory_hash):
-            return protocol.DirectoryDefResponse(ref_hash=directory_hash)
+            # An empty response here means "success".
+            return protocol.DirectoryDefResponse()
 
         missing = []
         for name, inode in definition.children.items():
@@ -224,7 +230,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                 missing.append(name)
 
         if missing:
-            return protocol.DirectoryDefResponse(ref_hash=None, missing_files=missing)
+            return protocol.DirectoryDefResponse(missing_files=missing)
 
         tmp_path = self._temp_path()
         with tmp_path.open('xb') as file:
@@ -234,7 +240,8 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             except Exception:
                 tmp_path.unlink()
                 raise
-        return protocol.DirectoryDefResponse(ref_hash=directory_hash)
+        # Success
+        return protocol.DirectoryDefResponse()
 
     async def upload_file_content(self, file_content: Union[Path, BinaryIO], resume_id: UUID,
                                   resume_from: int = 0) -> str:

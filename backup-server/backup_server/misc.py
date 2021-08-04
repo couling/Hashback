@@ -4,9 +4,6 @@ import os
 import signal
 import asyncio
 from typing import Union, Optional, Coroutine, Collection
-from pathlib import Path
-
-import click
 
 logger = logging.getLogger(__name__)
 

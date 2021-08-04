@@ -1,15 +1,14 @@
-from typing import Optional
 import os
 import logging
-import stat
+from typing import Optional
 from pathlib import Path
-from datetime import datetime
 from uuid import uuid4
 from asyncio import gather
-from typing import NamedTuple, Dict, List, Set
+from typing import Dict, List
 from dataclasses import dataclass, field
 
 from . import protocol
+from .misc import str_exception
 
 
 logger = logging.getLogger(__name__)
@@ -180,8 +179,17 @@ class Scanner:
         return protocol.Directory(__root__=child_inodes)
 
     async def _upload_directory(self, path: Path, last_scan_hash: str, directory: protocol.Directory) -> str:
-        ref_hash = protocol.hash_content(directory.dump())
-        # If the hash matches the last scan then there's no need to hash
+        """
+        Uploads a directory to the server.
+
+        First it uploads the filenames and inode information including hashes for all children.  The server can then
+        reject this if any or all children are missing from the server.  If that happens the server will respond
+        with a list of missing children...  we then upload all missing children and try again.
+        """
+        ref_hash = directory.hash().ref_hash
+        # If the hash matches the last scan then there's no need to go any further.  This is a shortcut, it tells us
+        # the server already has an exact copy of the directory.  This will not catch the case where an entire directory
+        # moved, only where it was completely unchanged.
         if ref_hash == last_scan_hash:
             logger.debug(f"Matches last backup: {path} as {ref_hash}")
             return ref_hash
@@ -190,21 +198,29 @@ class Scanner:
 
         # The directory has changed.  We send the contents over to the server. It will tell us what else it needs.
         server_response = await self.backup_session.directory_def(directory)
-        if server_response.missing_files:
-            for missing_file in server_response.missing_files:
-                await self._upload_missing_file(path, directory, missing_file)
-            # Retry the directory now that all files have been uploaded.  This should never fail.
-            # File hashes could have changed and files could have disappeared, so re-hash the directory
-            server_response = await self.backup_session.directory_def(directory, replaces=ref_hash)
-            if server_response.missing_files:
-                raise RuntimeError("Second attempt to store a directory on the server failed")
-            ref_hash = server_response.ref_hash
-            logger.debug(f"Complete {path} - {ref_hash}")
-        else:
-            logger.debug(f"Server already has identical copy of {path} as {server_response.ref_hash}")
+        if not server_response.success:
+            logger.debug(f"{len(server_response.missing_files)} missing files in {path}")
+            await gather(*(self._upload_missing_file(path, directory, missing_file)
+                           for missing_file in server_response.missing_files))
+            # Retry the directory now that all files have been uploaded.
+            # We let the server know this replaces the previous request.  Some servers may place a marker on the session
+            # preventing us from completing until unsuccessful requests have been replaced.
+            server_response = await self.backup_session.directory_def(directory, replaces=server_response.missing_ref)
+            if not server_response.success:
+                raise protocol.ProtocolError(
+                    "Files disappeared server-side while backup is in progress.  "
+                    "This must not happen or the backup will be corrupted. %s",
+                    {name: directory.children.get(name) for name in server_response.missing_files}
+                )
+            ref_hash = directory.hash().ref_hash
+
+        logger.debug(f"Server accepted directory {path} as {server_response.ref_hash}")
         return ref_hash
 
     async def _upload_missing_file(self, path: Path, directory: protocol.Directory, missing_file: str):
+        """
+        Upload a file after the server has stated it does not already have a copy.
+        """
         missing_file_path = path / missing_file
         logger.info(f"Uploading {missing_file_path}")
         try:
@@ -217,7 +233,7 @@ class Scanner:
             logger.error(f"File disappeared before it could be uploaded: {path / missing_file}")
             del directory.children[missing_file]
         except OSError as ex:
-            logger.error(f"Cannot upload: {path / missing_file} - {str(ex)}")
+            logger.error(f"Cannot upload: {path / missing_file} - {str_exception(ex)}")
 
 
 def _normalize_filters(filters: List[protocol.Filter]) -> _NormalizedFilter:

@@ -64,6 +64,11 @@ class Inode(BaseModel):
         )
 
 
+class DirectoryHash(NamedTuple):
+    ref_hash: str
+    content: bytes
+
+
 class Directory(BaseModel):
     __root__: Dict[str, Inode]
 
@@ -78,6 +83,10 @@ class Directory(BaseModel):
     def dump(self) -> bytes:
         return self.json(sort_keys=True).encode()
 
+    def hash(self) -> DirectoryHash:
+        content = self.dump()
+        return DirectoryHash(hash_content(content), content)
+
 
 class Backup(BaseModel):
     client_id: UUID
@@ -90,12 +99,23 @@ class Backup(BaseModel):
 
 
 class DirectoryDefResponse(BaseModel):
-    # The new ID of this directory - This is only valid for the session, once complete() the ID may change
-    # This may be set Null files are missing.
-    ref_hash: Optional[str]
-    # Optional list of files which will need to be uploaded before the session can completed.
-    # The client MUST retry the request once all missing files have been uploaded.
+    # If defining the directory could not complete because children were missing, the name (not path) of each missing
+    # file will be added to missing_files.
     missing_files: List[str] = []
+
+    # Optionally the server can track all directory def requests which have missing files.  BUT something can happen
+    # on the client side in between the two directory_def requests.  Eg: a file could be deleted before the client
+    # had chance to upload it.  When that happens the second directory_def request will have a different hash to the
+    # first.
+    # missing_ref is a server-side reference to the previous failed request.  This does not change with content,
+    # but may change each request.
+    missing_ref: Optional[str] = None
+
+    @property
+    def success(self) -> bool:
+        # If there were no missing files, then the definition was a success.
+        # This structure is NOT used to report errors
+        return not self.missing_files
 
 
 class FilterType(enum.Enum):
@@ -299,3 +319,52 @@ def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
             h.update(bytes_read)
             bytes_read = content.read(409600)
     return h.hexdigest()
+
+
+class RequestException(Exception):
+    pass
+
+
+class NotFoundException(RequestException):
+    pass
+
+
+class ServerInternalError(RequestException):
+    pass
+
+
+class ProtocolErrorException(Exception):
+    pass
+
+
+
+
+# Remote server-client interaction needs a way for the server to raise an exception with the client. Obviously we don't
+# want to give the server free reign to raise any exception so anything in this module (or imported into it) can be
+# raised by the server by name.
+EXCEPTIONS_BY_NAME = {
+    name: ex for name, ex in globals().items() if isinstance(ex, Exception)
+}
+
+EXCEPTIONS_BY_TYPE = {
+    ex: name for name, ex in globals().items() if isinstance(ex, Exception)
+}
+
+
+class RemoteException(BaseModel):
+    name: str
+    message: str
+
+    @classmethod
+    def from_exception(cls, exception: Union[ProtocolErrorException, RequestException]) -> "RemoteException":
+        return cls(name=EXCEPTIONS_BY_TYPE[type(exception)], message=str(exception))
+
+
+def remote_exception(spec: RemoteException) -> Union[RequestException, ProtocolErrorException]:
+    try:
+        exception = EXCEPTIONS_BY_NAME[spec.name]
+    except KeyError:
+        raise ProtocolErrorException("Server attempted to raise an unknown exception on the client side:\n"
+                                     f"Name: {spec.name}\n"
+                                     f"Message: {spec.message}")
+    return exception(spec.message)
