@@ -1,16 +1,20 @@
 import enum
 import stat
 import hashlib
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple
 from uuid import UUID, uuid4
 from pathlib import Path
-from abc import abstractmethod, abstractproperty
+from abc import abstractmethod
 from pydantic import BaseModel, Field
+
+# This will either get bumped, or the file will be duplicated and each one will have a VERSION.  In any case this file
+# specifies protocol version ...
+VERSION = "1.0"
 
 
 EMPTY_FILE = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
 
 class FileType(enum.Enum):
 
@@ -25,6 +29,7 @@ class FileType(enum.Enum):
 
 class Inode(BaseModel):
     modified_time: datetime
+    type: FileType
     mode: int
     size: int
     uid: int
@@ -41,12 +46,13 @@ class Inode(BaseModel):
         (FileType.LINK, stat.S_ISLNK),
     ]
 
-    @property
-    def type(self) -> FileType:
-        for file_type, check in self._MODE_CHECKS:
-            if check(self.mode):
+    @classmethod
+    def _type(cls, mode: int) -> FileType:
+        # TODO separate this into from_stat() and add a type attribute.
+        for file_type, check in cls._MODE_CHECKS:
+            if check(mode):
                 return file_type
-        raise ValueError(f"No type found for mode {self.mode}")
+        raise ValueError(f"No type found for mode {mode}")
 
     @property
     def permissions(self) -> int:
@@ -54,8 +60,10 @@ class Inode(BaseModel):
 
     @classmethod
     def from_stat(cls, s, hash_value: Optional[str]) -> "Inode":
+        stat.S_IMODE()
         return Inode(
-            mode=s.st_mode,
+            mode=stat.S_IMODE(s.st_mode),
+            type=cls._type(s.st_mode),
             size=s.st_size,
             uid=s.st_uid,
             gid=s.st_gid,
@@ -109,7 +117,7 @@ class DirectoryDefResponse(BaseModel):
     # first.
     # missing_ref is a server-side reference to the previous failed request.  This does not change with content,
     # but may change each request.
-    missing_ref: Optional[str] = None
+    missing_ref: Optional[UUID] = None
 
     @property
     def success(self) -> bool:
@@ -123,45 +131,56 @@ class FilterType(enum.Enum):
     EXCLUDE = 'exclude'
 
 
-class Filter(NamedTuple):
-    filter: FilterType
-    path: str
+class Filter(BaseModel):
+    filter: FilterType = Field(...)
+    path: str = Field(...)
 
 
 class ClientConfiguredBackupDirectory(BaseModel):
-    base_path: str
+    base_path: str = Field(...)
     filters: List[Filter] = Field(default_factory=list)
 
 
 class ClientConfiguration(BaseModel):
     # Friendly name for the client, useful for logging
-    client_name: str
+    client_name: str = Field(...)
 
     # The id of this client
     client_id: UUID = Field(default_factory=uuid4)
 
     # Typically set to 1 day or 1 hour.
-    backup_granularity: timedelta = timedelta(days=1)
+    backup_granularity: timedelta = Field(timedelta(days=1))
 
     # backup
     backup_directories: Dict[str, ClientConfiguredBackupDirectory] = Field(default_factory=dict)
 
 
-class BackupSession(Protocol):
-    # This ID of this session.  This can be used to resume the session later
+class BackupSessionConfig(BaseModel):
+    client_id: UUID
     session_id: UUID
-
-    # The reference backup date for this session.
     backup_date: datetime
+    started: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    allow_overwrite: bool
+    description: Optional[str] = None
 
-    # The time this session will be automatically discarded.
-    expires: datetime
+    class Config:
+        allow_mutation = False
 
-    # Is the session still open.  Initially True.  Will be set False when the session is completed or discarded
-    is_open: bool
+
+class BackupSession(Protocol):
+
+    @property
+    @abstractmethod
+    def config(self) -> BackupSessionConfig:
+        """The settings for this backup session"""
+
+    @property
+    @abstractmethod
+    def is_open(self) -> bool:
+        """Is the session still open.  Initially True.  Will be set False when the session is completed or discarded"""
 
     @abstractmethod
-    async def directory_def(self, definition: Directory, replaces: Optional[str] = None) -> DirectoryDefResponse:
+    async def directory_def(self, definition: Directory, replaces: Optional[UUID] = None) -> DirectoryDefResponse:
         """
         Add a directory definition to the server.  The server is ultimately responsible for giving the hash of the
         :param definition: The contents of the directory with the file name as the key and the Inode as the value
@@ -172,14 +191,27 @@ class BackupSession(Protocol):
 
     @abstractmethod
     async def upload_file_content(self, file_content: Union[Path, BinaryIO], resume_id: UUID,
-                                  resume_from: int = 0) -> str:
+                                  resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
         """
         Upload a file, or part of a file to the server.  The server will respond with an ID (the hash) for that file.
         If the upload is interrupted, then the backup can resume where it left off by first calling
         check_file_upload_size and then upload_file_content with the same_resume_id, sending only the remaining part of
         the file.
 
-        Be very careful not to re-use resume_id within the same session!
+        Clients MUST NOT call upload_file_content in parallel or out of sequence.  This would make it impossible to
+        determine how much of a request succeeded with check_file_upload_size.  Servers may raise a ProtocolError if
+        this occurs.  However server authors should be mindful that their own locks could cause phantom parallel
+        requests avoid tripping up a client unnecessarily.
+
+        Clients may use the resume feature to upload non-zero sections of a partial file.  Thus servers MUST support
+        the scenario where a client calls upload_file_content with a resume_from much larger than the existing partial
+        file.  Even servers MUST support calling upload_file_content with resume_from > 0 on the first request for that
+        file.
+
+        Clients MUST NOT call upload_file_content on a file after it has been successfully completed (with
+        complete=True).  Clients may use check_file_upload_size to check if the previous interrupted request completed.
+        Here a NotFoundException would infer the previous request completed successfully.
+
         :param file_content: Either a Path pointing to a local file or a readable and seekable BinaryIO.  If path is
             specified then restart logic is inferred
         :param resume_id: I locally specified ID to use to resume file upload in the vent it fails part way through.
@@ -187,6 +219,10 @@ class BackupSession(Protocol):
         :param resume_from: When resuming a failed upload, this specifies how many bytes of the partial upload to keep.
             EG: if this is set to 500 then the first 500 bytes of the partial upload will be kept and all beyond that
             will be overwritten.  Not this will implicitly cause a seek operation on file_content.
+        :param is_complete: If complete is True an ID will be generated and resume_id will be invalidated.  If complete
+            is False, no complete ID
+        :return: The ref_hash of the newly uploaded file if complete=True or None if complete=False.  Clients may use
+            ref_hash to check the file was not corrupted in transit.
         """
 
     @abstractmethod
@@ -202,10 +238,13 @@ class BackupSession(Protocol):
     async def check_file_upload_size(self, resume_id: UUID) -> int:
         """
         Checks to see how much of a file was successfully uploaded.
+        :param resume_id: The resume_id specified in upload_file_content
+        :raises: NotFoundException if either an incorrect resume_id was specified, or otherwise the specified file
+            has already completed (effectively deleting the resume_id server-side).
         """
 
     @abstractmethod
-    async def complete(self) -> None:
+    async def complete(self) -> Backup:
         """
         Finalize the backup.  Once this has completed, the backup will be visible to other clients and it cannot be
         modified further.
@@ -226,10 +265,14 @@ class BackupSession(Protocol):
 
 
 class ServerSession(Protocol):
-    client_config: ClientConfiguration
+
+    @property
+    @abstractmethod
+    def client_config(self) -> ClientConfiguration:
+        pass
 
     @abstractmethod
-    async def start_backup(self, backup_date: datetime, replace_okay: bool = False, description: Optional[str] = None
+    async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False, description: Optional[str] = None
                            ) -> BackupSession:
         """
         Create a new session on the server.  This is used to upload a backup to the server.  Backups happen as a
@@ -237,7 +280,7 @@ class ServerSession(Protocol):
         until the session has been completed.
         :param backup_date: The date/time for this backup.
             This will be rounded based on the configured backup_granularity
-        :param replace_okay: If False then an error will be raised if the configured backup already exists.  If True
+        :param allow_overwrite: If False then an error will be raised if the configured backup already exists.  If True
             The existing backup will be destroyed on complete().
         :param description: User specified description of this backup
         """
@@ -265,15 +308,15 @@ class ServerSession(Protocol):
         """
 
     @abstractmethod
-    async def read_directory(self, inode: Inode) -> Directory:
+    async def get_directory(self, inode: Inode) -> Directory:
         """
         Reads a directory
         :param inode: The handle to the directory
         """
 
     @abstractmethod
-    async def read_file(self, inode: Inode, target_path: Optional[Path] = None,
-                        restore_permissions: bool = False, restore_owner: bool = False) -> Optional[BinaryIO]:
+    async def get_file(self, inode: Inode, target_path: Optional[Path] = None,
+                       restore_permissions: bool = False, restore_owner: bool = False) -> Optional[BinaryIO]:
         """
         Reads a file.
         :param inode: The handle to the file
@@ -300,7 +343,8 @@ def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta):
 
 def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
     """
-    Generate an sha256sum for the given content
+    Generate an sha256sum for the given content.  Yes this is absolutely part of the protocol!
+    Either the server or client can hash the same file and the result MUST match on both sides or things will break.
     """
     h = hashlib.sha256()
     if isinstance(content, bytes):
@@ -322,32 +366,38 @@ def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
 
 
 class RequestException(Exception):
-    pass
+    http_status = 400  # Not knowing the cause of this request exception we can only assume it was an internal error
 
 
 class NotFoundException(RequestException):
-    pass
+    http_status = 404  # Not Found
 
 
-class ServerInternalError(RequestException):
-    pass
+class InternalServerError(RequestException):
+    http_status = 500  # Server did something wong.  Check the server logs.
 
 
-class ProtocolErrorException(Exception):
-    pass
+class SessionClosed(RequestException):
+    http_status = 410  # Gone
 
 
+class ProtocolError(Exception):
+    http_status: int = 400  # Bad request
+
+
+class InvalidArgumentsError(ProtocolError):
+    http_status: int = 422  # Unprocessable entity
 
 
 # Remote server-client interaction needs a way for the server to raise an exception with the client. Obviously we don't
 # want to give the server free reign to raise any exception so anything in this module (or imported into it) can be
 # raised by the server by name.
 EXCEPTIONS_BY_NAME = {
-    name: ex for name, ex in globals().items() if isinstance(ex, Exception)
+    name: ex for name, ex in globals().items() if isinstance(ex, type) and issubclass(ex, Exception)
 }
 
 EXCEPTIONS_BY_TYPE = {
-    ex: name for name, ex in globals().items() if isinstance(ex, Exception)
+    ex: name for name, ex in globals().items() if isinstance(ex, type) and issubclass(ex, Exception)
 }
 
 
@@ -356,15 +406,26 @@ class RemoteException(BaseModel):
     message: str
 
     @classmethod
-    def from_exception(cls, exception: Union[ProtocolErrorException, RequestException]) -> "RemoteException":
+    def from_exception(cls, exception: Union[ProtocolError, RequestException]) -> "RemoteException":
         return cls(name=EXCEPTIONS_BY_TYPE[type(exception)], message=str(exception))
 
+    def exception(self) -> Union[RequestException, ProtocolError]:
+        try:
+            exception = EXCEPTIONS_BY_NAME[self.name]
+        except KeyError:
+            raise ProtocolError("Server attempted to raise an unknown exception on the client side:\n"
+                                f"Name: {self.name}\n"
+                                f"Message: {self.message}")
+        return exception(self.message)
 
-def remote_exception(spec: RemoteException) -> Union[RequestException, ProtocolErrorException]:
-    try:
-        exception = EXCEPTIONS_BY_NAME[spec.name]
-    except KeyError:
-        raise ProtocolErrorException("Server attempted to raise an unknown exception on the client side:\n"
-                                     f"Name: {spec.name}\n"
-                                     f"Message: {spec.message}")
-    return exception(spec.message)
+
+
+
+
+def restore_meta(file_path: Path, inode: Inode, restore_owner: bool, restore_permissions):
+    if restore_owner:
+        os.chown(file_path, inode.uid, inode.gid)
+    if restore_permissions:
+        os.chmod(file_path, inode.mode)
+    timestamp = inode.modified_time.timestamp()
+    os.utime(file_path, (timestamp, timestamp))

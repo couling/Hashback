@@ -3,9 +3,15 @@ import json
 import os
 import signal
 import asyncio
-from typing import Union, Optional, Coroutine, Collection
+from typing import Union, Optional, Coroutine, Collection, Dict, Any
+import collections.abc
+from copy import deepcopy
+
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
 def setup_logging(default_level: int = logging.INFO):
@@ -32,26 +38,40 @@ def setup_logging(default_level: int = logging.INFO):
     except KeyError:
         default_level_name = logging.getLevelName(default_level)
 
-    logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=default_level)
+    logging.basicConfig(format=DEFAULT_LOG_FORMAT, level=default_level)
 
     # We can't log anything before logging.basicConfig so we have to check it again after and log the message here
     if not isinstance(logging.getLevelName(default_level_name), int):
         logger.warning(f"Unknown log level name {default_level_name} in LOG_LEVEL")
     logger.debug(f"Logging configured to default level {logging.getLevelName(default_level)}")
 
-    # If there's LOG_LEVELS environment variable, use it to set fine grained levels.
-    try:
-        log_levels = json.loads(os.environ.get("LOG_LEVELS", ""))
-    except json.decoder.JSONDecodeError:
-        return
-
-    for logger_name, level_name in log_levels.items():
+    for logger_name, level_name in environ_log_levels().items():
         log_level = logger.getLevelName(level_name)
         if not isinstance(log_level, int):
             logger.warning(f"Unknown log level name {level_name} in LOG_LEVELS")
         else:
             logging.getLogger(logger_name).level = log_level
             logger.debug(f"Logging for '{logger_name}' set to {logging.getLevelName(log_level)}")
+
+
+def environ_log_levels() -> Dict:
+    try:
+        result = json.loads(os.environ.get('LOG_LEVELS', ""))
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+    return {}
+
+
+def merge(base, update):
+    base = deepcopy(base)
+    for k, v in update.items():
+        if isinstance(v, collections.abc.Mapping):
+            base[k] = merge(base.get(k, {}), v)
+        else:
+            base[k] = v
+    return base
 
 
 def clean_shutdown(num, _):

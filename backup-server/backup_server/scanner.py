@@ -137,7 +137,7 @@ class Scanner:
             last_scan_children = {}
         else:
             logger.debug(f"Fetching last_scan {last_scan.hash} for {dir_path}")
-            last_scan_directory = await self.backup_session.server_session.read_directory(last_scan)
+            last_scan_directory = await self.backup_session.server_session.get_directory(last_scan)
             last_scan_children = last_scan_directory.children
 
         filter_tree = filters.exceptions if filters is not None else {}

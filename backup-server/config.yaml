@@ -1,8 +1,0 @@
-paths:
-  Documents:
-    path: /Users/philip/Documents/AusPlatform
-
-server:
-  url: backup://localhost
-  device_id: test
-  secret: Shhhhhh! This is a secret!

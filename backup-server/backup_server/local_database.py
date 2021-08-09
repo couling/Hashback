@@ -4,12 +4,12 @@ import shutil
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Union, BinaryIO
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from . import protocol
-from .protocol import Inode, Directory, Backup
+from .protocol import Inode, Directory, Backup, BackupSessionConfig
 
 _CONFIG_FILE = 'config.json'
 _READ_SIZE = 40960
@@ -21,14 +21,6 @@ logger = logging.getLogger(__name__)
 class Configuration(BaseModel):
     store_split_count = 1
     store_split_size = 2
-
-
-class BackupSessionConfig(BaseModel):
-    client_id: UUID
-    backup_date: datetime
-    started: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    allow_overwrite: bool
-    description: Optional[str] = None
 
 
 class LocalDatabase:
@@ -47,12 +39,20 @@ class LocalDatabase:
 
     def open_client_session(self, client_id: Optional[UUID] = None, client_name: Optional[str] = None
                             ) -> "LocalDatabaseServerSession":
-        if client_name is not None:
-            # TODO change this for pathlib readlink once python 3.9 has bedded in.
-            client_id = UUID(os.readlink((self._base_path / self._CLIENT_DIR / client_name)))
+        try:
+            if client_name is not None:
+                # TODO change this for pathlib readlink once python 3.9 has bedded in.
+                client_id = UUID(os.readlink((self._base_path / self._CLIENT_DIR / client_name)))
 
-        client_path = self._base_path / self._CLIENT_DIR / client_id.hex
-        return LocalDatabaseServerSession(self, client_path)
+            client_path = self._base_path / self._CLIENT_DIR / client_id.hex
+
+            return LocalDatabaseServerSession(self, client_path)
+        except FileNotFoundError:
+            logger.error(f"Session not found {client_name or client_id}")
+            raise protocol.SessionClosed(f"No such session {client_name or client_id}")
+        except OSError:
+            logger.error(f"Could not load session", exc_info=True)
+            raise protocol.InternalServerError()
 
     def store_path_for(self, ref_hash: str) -> Path:
         split_size = self.config.store_split_size
@@ -86,6 +86,8 @@ class LocalDatabaseServerSession(protocol.ServerSession):
     _SESSIONS = 'sessions'
     _TIMESTMAP_FORMAT = "%Y-%m-%d_%H:%M:%S.%f"
 
+    client_config: protocol.ClientConfiguration = None
+
     def __init__(self, database: LocalDatabase, client_path: Path):
         self._database = database
         self._client_path = client_path
@@ -107,8 +109,9 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         backup_session_id = uuid4()
         backup_session_path = self._path_for_session_id(backup_session_id)
         backup_session_path.mkdir(exist_ok=False, parents=True)
-        session_config = BackupSessionConfig(
+        session_config = protocol.BackupSessionConfig(
             client_id=self.client_config.client_id,
+            session_id=backup_session_id,
             allow_overwrite=allow_overwrite,
             backup_date=backup_date,
             description=description,
@@ -149,14 +152,14 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         with backup_path.open('r') as file:
             return protocol.Backup.parse_raw(file.read())
 
-    async def read_directory(self, inode: Inode) -> Directory:
+    async def get_directory(self, inode: Inode) -> Directory:
         if inode.type != protocol.FileType.DIRECTORY:
             raise ValueError(f"Cannot open file type {inode.type} as a directory")
         with self._database.store_path_for(inode.hash).open('r') as file:
             return Directory.parse_raw(file.read())
 
-    async def read_file(self, inode: Inode, target_path: Optional[Path] = None,
-                        restore_permissions: bool = False, restore_owner: bool = False) -> Optional[BinaryIO]:
+    async def get_file(self, inode: Inode, target_path: Optional[Path] = None,
+                       restore_permissions: bool = False, restore_owner: bool = False) -> Optional[BinaryIO]:
         if inode.type not in (protocol.FileType.REGULAR, protocol.FileType.LINK, protocol.FileType.PIPE):
             raise ValueError(f"Cannot read a file type {inode.type}")
         if target_path is not None:
@@ -174,10 +177,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
                 if inode.hash != protocol.EMPTY_FILE:
                     raise ValueError(f"File of type {inode.type} must be empty.  But this one is not: {inode.hash}")
                 os.mkfifo(target_path)
-            if restore_permissions:
-                target_path.chmod(inode.permissions)
-            if restore_owner:
-                os.chown(target_path, uid=inode.uid, gid=inode.gid)
+            protocol.restore_meta(target_path, inode, restore_owner, restore_permissions)
         else:
             return self._database.store_path_for(inode.hash).open('rb')
 
@@ -203,18 +203,31 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     def __init__(self, client_session: LocalDatabaseServerSession, session_path: Path):
         self._server_session = client_session
         self._session_path = session_path
-        with (session_path / _CONFIG_FILE).open('r') as file:
-            self._config = BackupSessionConfig.parse_raw(file.read())
-        self.is_open = True
+        try:
+            with (session_path / _CONFIG_FILE).open('r') as file:
+                self._config = protocol.BackupSessionConfig.parse_raw(file.read())
+        except FileNotFoundError as ex:
+            raise protocol.SessionClosed(session_path.name) from ex
         (session_path / self._NEW_OBJECTS).mkdir(exist_ok=True, parents=True)
         (session_path / self._ROOTS).mkdir(exist_ok=True, parents=True)
         (session_path / self._PARTIAL).mkdir(exist_ok=True, parents=True)
-        self.backup_date = self._config.backup_date
-        self.session_id = UUID(session_path.name)
 
-    async def directory_def(self, definition: protocol.Directory, replaces: Optional[str] = None
+    @property
+    def config(self) -> BackupSessionConfig:
+        return self._config
+
+    @property
+    def session_id(self) -> UUID:
+        return UUID(self._session_path.name)
+
+    @property
+    def backup_date(self) -> datetime:
+        return self._config.backup_date
+
+    async def directory_def(self, definition: protocol.Directory, replaces: Optional[UUID] = None
                             ) -> protocol.DirectoryDefResponse:
-
+        if not self.is_open:
+            raise protocol.SessionClosed()
         for name, child in definition.children.items():
             if child.hash is None:
                 raise ValueError(f"Child {name} has no hash value")
@@ -237,33 +250,36 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             try:
                 file.write(content)
                 tmp_path.rename(self._store_path_for(directory_hash))
-            except Exception:
+            except:
                 tmp_path.unlink()
                 raise
         # Success
         return protocol.DirectoryDefResponse()
 
     async def upload_file_content(self, file_content: Union[Path, BinaryIO], resume_id: UUID,
-                                  resume_from: int = 0) -> str:
+                                  resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
+        if not self.is_open:
+            raise protocol.SessionClosed()
         h = hashlib.sha256()
         temp_file = self._temp_path(resume_id)
         if isinstance(file_content, Path):
             file_content = file_content.open('rb')
+            # We only seek if this is a path... That's because the path is a full file where BinaryIO may be partial.
+            # We trust the calling code to have already seeked to the correct position.
+            file_content.seek(resume_from, os.SEEK_SET)
         with file_content, temp_file.open('wb') as target:
-
             # If we are resuming the file
-            if resume_from:
-                # Seek the source file to the resume position
-                file_content.seek(resume_from, os.SEEK_SET)
-
-                # Read partial target file to update the hash
-                if file_content.tell() < resume_from:
-                    raise ValueError("resume_from is larger than source file")
-                while target.tell() < resume_from:
-                    bytes_read = target.read(max(_READ_SIZE, resume_from - target.tell()))
-                    if not bytes_read:
-                        raise ValueError("resume_from is larger tan existing target file")
-                    h.update(bytes_read)
+            if is_complete:
+                if resume_from:
+                    while target.tell() < resume_from:
+                        bytes_read = target.read(max(_READ_SIZE, resume_from - target.tell()))
+                        if not bytes_read:
+                            bytes_read = bytes(max(_READ_SIZE, resume_from - target.tell()))
+                        h.update(bytes_read)
+            # In the event this is a partial file we may not end up with our current position in the right place
+            # because resume_from > partial file length.  seek will put us in the right position.
+            if resume_from > 0:
+                target.seek(resume_from, os.SEEK_SET)
 
             # Write the file content
             bytes_read = file_content.read(_READ_SIZE)
@@ -272,12 +288,23 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                 target.write(bytes_read)
                 bytes_read = file_content.read(_READ_SIZE)
 
+        if not is_complete:
+            return None
+
         # Move the temporary file to new_objects named as it's hash
         ref_hash = h.hexdigest()
-        temp_file.rename(self._new_object_path_for(ref_hash))
+        if self._object_exists(ref_hash):
+            # Theoretically this
+            logger.debug(f"File already exists after upload {ref_hash}")
+            temp_file.unlink()
+        else:
+            logger.debug(f"File upload complete {temp_file}")
+            temp_file.rename(self._new_object_path_for(ref_hash))
         return ref_hash
 
     async def add_root_dir(self, root_dir_name: str, inode: protocol.Inode) -> None:
+        if not self.is_open:
+            raise protocol.SessionClosed()
         if not self._object_exists(inode.hash):
             raise ValueError(f"Cannot create {root_dir_name} - does not exist: {inode.hash}")
         file_path = self._session_path / self._ROOTS / root_dir_name
@@ -285,9 +312,13 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             file.write(inode.json())
 
     async def check_file_upload_size(self, resume_id: UUID) -> int:
+        if not self.is_open:
+            raise protocol.SessionClosed()
         return self._temp_path(resume_id).stat().st_size
 
-    async def complete(self) -> None:
+    async def complete(self) -> protocol.Backup:
+        if not self.is_open:
+            raise protocol.SessionClosed()
         logger.info(f"Committing {self._session_path.name} for {self._server_session.client_config.client_name} "
                     f"({self._server_session.client_config.client_id}) - {self._config.backup_date}")
         for file_path in (self._session_path / self._NEW_OBJECTS).iterdir():
@@ -313,9 +344,11 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         )
         self._server_session.complete_backup(backup_meta, self._config.allow_overwrite)
         await self.discard()
+        return backup_meta
 
     async def discard(self) -> None:
-        self.is_open = False
+        if not self.is_open:
+            raise protocol.SessionClosed()
         shutil.rmtree(self._session_path)
 
     def _object_exists(self, ref_hash: str) -> bool:
@@ -336,3 +369,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     @property
     def server_session(self) -> protocol.ServerSession:
         return self._server_session
+
+    @property
+    def is_open(self) -> bool:
+        return self._session_path.exists()
