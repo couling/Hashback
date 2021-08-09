@@ -64,9 +64,21 @@ class ClientSession(protocol.ServerSession):
         return await self._client.request(http_protocol.GET_DIRECTORY, ref_hash=inode.hash)
 
     async def get_file(self, inode: Inode, target_path: Optional[Path] = None, restore_permissions: bool = False,
-                       restore_owner: bool = False) -> Optional[BinaryIO]:
-        # TODO Need up clean up BytesIO into something compatable with async to make this work.
-        raise NotImplementedError()
+                       restore_owner: bool = False) -> Optional[protocol.FileReader]:
+        result: aiohttp.ClientResponse
+        result = await self._client.request(http_protocol.GET_FILE, restore_permissions=restore_permissions,
+                                            restore_owner=restore_owner)
+        with result:
+            content_length = result.headers.get('Content-Length', None)
+            if content_length is not None:
+                content_length = int(content_length)
+            content = result.content
+            content.file_size = content_length
+            content.close = lambda: None
+        if target_path is None:
+            return content
+        await protocol.restore_file(target_path, inode, content, restore_owner, restore_permissions)
+        return None
 
 
 class ClientBackupSession(protocol.BackupSession):
@@ -101,7 +113,7 @@ class ClientBackupSession(protocol.BackupSession):
     async def check_file_upload_size(self, resume_id: UUID) -> int:
         response = await self._request(http_protocol.FILE_PARTIAL_SIZE, resume_id=resume_id)
         return response.size
-        
+
     async def complete(self) -> Backup:
         return await self._request(http_protocol.COMPLETE_BACKUP)
 
@@ -143,7 +155,6 @@ class BasicAuthClient(Client):
         self._client = client
         self._server_properties = None
 
-
     @property
     def server_properties(self) -> http_protocol.ServerProperties:
         return self._server_properties
@@ -161,7 +172,7 @@ class BasicAuthClient(Client):
             raise reason.exception()
         if hasattr(endpoint.result_type, 'parse_obj'):
             return endpoint.result_type.parse_obj(await response.json())
-        return None
+        return response
 
     async def close(self):
         await self._client.close()

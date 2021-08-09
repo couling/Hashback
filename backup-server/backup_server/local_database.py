@@ -2,6 +2,7 @@ import hashlib
 import os
 import shutil
 import logging
+import aiofiles
 from datetime import datetime, timezone
 from typing import Optional, Union, BinaryIO
 from pydantic import BaseModel
@@ -12,7 +13,7 @@ from . import protocol
 from .protocol import Inode, Directory, Backup, BackupSessionConfig
 
 _CONFIG_FILE = 'config.json'
-_READ_SIZE = 40960
+
 
 
 logger = logging.getLogger(__name__)
@@ -159,27 +160,19 @@ class LocalDatabaseServerSession(protocol.ServerSession):
             return Directory.parse_raw(file.read())
 
     async def get_file(self, inode: Inode, target_path: Optional[Path] = None,
-                       restore_permissions: bool = False, restore_owner: bool = False) -> Optional[BinaryIO]:
+                       restore_permissions: bool = False, restore_owner: bool = False) -> Optional[protocol.FileReader]:
         if inode.type not in (protocol.FileType.REGULAR, protocol.FileType.LINK, protocol.FileType.PIPE):
             raise ValueError(f"Cannot read a file type {inode.type}")
         if target_path is not None:
-            if inode.type == protocol.FileType.REGULAR:
-                with self._database.store_path_for(inode.hash).open('rb') as source, target_path.open('xb') as target:
-                    content = source.read(_READ_SIZE)
-                    while content:
-                        target.write(content)
-                        content = source.read(_READ_SIZE)
-            elif inode.type == protocol.FileType.LINK:
-                with self._database.store_path_for(inode.hash).open('r') as source:
-                    link_target = source.read()
-                target_path.symlink_to(link_target)
-            else:  # inode.type == protocol.FileType.PIPE:
-                if inode.hash != protocol.EMPTY_FILE:
-                    raise ValueError(f"File of type {inode.type} must be empty.  But this one is not: {inode.hash}")
-                os.mkfifo(target_path)
-            protocol.restore_meta(target_path, inode, restore_owner, restore_permissions)
+            async with self._database.store_path_for(inode.hash).open('rb') as content:
+                protocol.restore_file(target_path, inode, content, restore_owner, restore_permissions)
+            return None
         else:
-            return self._database.store_path_for(inode.hash).open('rb')
+            result_path = self._database.store_path_for(inode.hash)
+            result_size = result_path.stat().st_size
+            result = await aiofiles.open(self._database.store_path_for(inode.hash),"rb")
+            result.file_size = result_size
+            return result
 
     def complete_backup(self, meta: protocol.Backup, overwrite: bool):
         backup_path = self._path_for_backup_date(meta.backup_date)
@@ -272,9 +265,9 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             if is_complete:
                 if resume_from:
                     while target.tell() < resume_from:
-                        bytes_read = target.read(max(_READ_SIZE, resume_from - target.tell()))
+                        bytes_read = target.read(max(protocol.READ_SIZE, resume_from - target.tell()))
                         if not bytes_read:
-                            bytes_read = bytes(max(_READ_SIZE, resume_from - target.tell()))
+                            bytes_read = bytes(max(protocol.READ_SIZE, resume_from - target.tell()))
                         h.update(bytes_read)
             # In the event this is a partial file we may not end up with our current position in the right place
             # because resume_from > partial file length.  seek will put us in the right position.
@@ -282,11 +275,11 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                 target.seek(resume_from, os.SEEK_SET)
 
             # Write the file content
-            bytes_read = file_content.read(_READ_SIZE)
+            bytes_read = file_content.read(protocol.READ_SIZE)
             while bytes_read:
                 h.update(bytes_read)
                 target.write(bytes_read)
-                bytes_read = file_content.read(_READ_SIZE)
+                bytes_read = file_content.read(protocol.READ_SIZE)
 
         if not is_complete:
             return None

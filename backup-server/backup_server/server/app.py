@@ -1,5 +1,4 @@
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Optional, Union, BinaryIO
 from uuid import UUID
@@ -67,24 +66,20 @@ async def get_directory(ref_hash: str, session: ServerSession = Depends(cache.us
 @endpoint(http_protocol.GET_FILE)
 async def get_file(ref_hash: str, session: ServerSession = Depends(cache.user_session)) -> fastapi.Response:
     read_size = 1024*1024
-    def read_content():
+    async def read_content():
         with content:
-            bytes_read = content.read(read_size)
+            bytes_read = await content.read(read_size)
             while bytes_read:
                 yield bytes_read
-                bytes_read = content.read(read_size)
+                bytes_read = await content.read(read_size)
 
     inode = protocol.Inode(mode=0, size=0, uid=0, gid=0, hash=ref_hash, type=protocol.FileType.REGULAR,
                            modified_time=datetime(year=1970, month=1, day=1))
     content = await session.get_file(inode)
 
     try:
-        if content.seekable():
-            start_pos = content.tell()
-            content.seek(0, os.SEEK_END)
-            end_pos = content.tell()
-            content.seek(start_pos, os.SEEK_SET)
-            headers = {'Content-Length': str(end_pos - start_pos)}
+        if content.file_size > 0:
+            headers = {'Content-Length': str(content.file_size)}
         else:
             headers = {}
         return fastapi.responses.StreamingResponse(content=read_content(), status_code=200, headers=headers)

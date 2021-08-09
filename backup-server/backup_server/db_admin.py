@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 @click.group()
-@click.option("--database", type=click.Path(path_type=Path, file_okay=False), default=".", envvar="DATABASE")
+@click.option("--database", type=click.Path(path_type=Path, file_okay=False), default=".", envvar="BACKUP_DATABASE")
 @click.pass_context
 def main(ctx: click.Context, database: Path):
     if ctx.invoked_subcommand != 'create':
@@ -77,43 +77,6 @@ def add_directory(database: LocalDatabase, client_name: str, root_name: str, roo
         new_dir.filters.append(protocol.Filter(protocol.FilterType.EXCLUDE, path))
     client.client_config.backup_directories[root_name] = new_dir
     client.save_config()
-
-
-@main.command("backup")
-@click.argument('CLIENT_NAME', envvar="CLIENT_NAME")
-@click.option("--timestamp", type=click.DateTime(formats=['%Y-%m-%d', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']))
-@click.option("--description")
-@click.option("--overwrite/--no-overwrite", default=False)
-@click.pass_obj
-def backup(database: LocalDatabase,  client_name: str, timestamp: datetime, description: Optional[str],
-           overwrite: bool):
-    server_session = database.open_client_session(client_name=client_name)
-
-    if timestamp is None:
-        timestamp = datetime.now(dateutil.tz.gettz())
-    elif timestamp.tzinfo is None:
-        timestamp = timestamp.astimezone(dateutil.tz.gettz())
-
-    async def _backup():
-        backup_session = await server_session.start_backup(
-            backup_date=timestamp,
-            allow_overwrite=overwrite,
-            description=description,
-        )
-
-        logger.info(f"Backup - {backup_session.backup_date}")
-        backup_scanner = scanner.Scanner(backup_session)
-        try:
-            await backup_scanner.scan_all()
-            logger.info("Finalizing backup")
-            await backup_session.complete()
-            logger.info("All done")
-        except (Exception, asyncio.CancelledError) as ex:
-            logger.warning("Discarding session (%s)", str_exception(ex))
-            await backup_session.discard()
-            raise
-
-    run_then_cancel(_backup())
 
 
 @main.command("migrate-backup")
@@ -210,7 +173,7 @@ def migrate_single_backup(server_session: protocol.ServerSession, base_path: Pat
             description=description,
         )
 
-        logger.info(f"Migrating Backup - {backup_session.backup_date}")
+        logger.info(f"Migrating Backup - {backup_session.config.backup_date}")
         backup_directories = {name: offset_base_path(value, base_path)
                               for name, value in server_session.client_config.backup_directories.items()}
         backup_scanner = BackupMigrationScanner(backup_session, hardlinks)

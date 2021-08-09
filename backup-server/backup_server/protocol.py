@@ -2,8 +2,10 @@ import enum
 import stat
 import hashlib
 import os
+import io
+import aiofiles.os
 from datetime import datetime, timedelta, timezone
-from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple
+from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple, Coroutine
 from uuid import UUID, uuid4
 from pathlib import Path
 from abc import abstractmethod
@@ -15,6 +17,7 @@ VERSION = "1.0"
 
 
 EMPTY_FILE = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+READ_SIZE = 1024**2
 
 class FileType(enum.Enum):
 
@@ -70,6 +73,21 @@ class Inode(BaseModel):
             modified_time=datetime.fromtimestamp(s.st_mtime),
             hash=hash_value,
         )
+
+
+class FileReader(Protocol):
+    @abstractmethod
+    async def read(self, n: Optional[int] = None) -> bytes:
+        pass
+
+    @abstractmethod
+    def close(self):
+        pass
+
+    @property
+    @abstractmethod
+    def file_size(self) -> int:
+        pass
 
 
 class DirectoryHash(NamedTuple):
@@ -316,7 +334,7 @@ class ServerSession(Protocol):
 
     @abstractmethod
     async def get_file(self, inode: Inode, target_path: Optional[Path] = None,
-                       restore_permissions: bool = False, restore_owner: bool = False) -> Optional[BinaryIO]:
+                       restore_permissions: bool = False, restore_owner: bool = False) -> Optional[FileReader]:
         """
         Reads a file.
         :param inode: The handle to the file
@@ -419,10 +437,22 @@ class RemoteException(BaseModel):
         return exception(self.message)
 
 
+async def restore_file(file_path: Path, inode: Inode, content: FileReader, restore_owner: bool, restore_permissions):
+    # TODO verify hash as we go
+    if inode.type == FileType.REGULAR:
+        async with aiofiles.open(file_path, 'xb') as target:
+            content = await content.read(READ_SIZE)
+            while content:
+                await target.write(content)
+                content = await content.read(READ_SIZE)
+    elif inode.type == FileType.LINK:
+        link_target = (await content.read()).decode()
+        file_path.symlink_to(link_target)
+    else:  # inode.type == protocol.FileType.PIPE:
+        if inode.hash != EMPTY_FILE:
+            raise ValueError(f"File of type {inode.type} must be empty.  But this one is not: {inode.hash}")
+        os.mkfifo(file_path)
 
-
-
-def restore_meta(file_path: Path, inode: Inode, restore_owner: bool, restore_permissions):
     if restore_owner:
         os.chown(file_path, inode.uid, inode.gid)
     if restore_permissions:
