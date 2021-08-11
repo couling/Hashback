@@ -10,7 +10,6 @@ from . import SERVER_VERSION, cache
 from .. import protocol, http_protocol, misc
 from ..protocol import ServerSession, BackupSession, BackupSessionConfig, ClientConfiguration, Backup
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +41,7 @@ async def hello() -> http_protocol.ServerVersion:
 
 
 @endpoint(http_protocol.USER_CLIENT_CONFIG)
-def about_me(session: ServerSession = Depends(cache.user_session)) -> ClientConfiguration:
+async def about_me(session: ServerSession = Depends(cache.user_session)) -> ClientConfiguration:
     return session.client_config
 
 
@@ -57,10 +56,12 @@ async def get_backup_latest(backup_date: datetime, session: ServerSession = Depe
 
 
 @endpoint(http_protocol.GET_DIRECTORY)
-async def get_directory(ref_hash: str, session: ServerSession = Depends(cache.user_session)) -> protocol.Directory:
+async def get_directory(ref_hash: str, session: ServerSession = Depends(cache.user_session)
+                        ) -> http_protocol.GetDirectoryResponse:
     inode = protocol.Inode(mode=0, size=0, uid=0, gid=0, hash=ref_hash, type=protocol.FileType.DIRECTORY,
                            modified_time=datetime(year=1970, month=1, day=1))
-    return await session.get_directory(inode)
+    result =  await session.get_directory(inode)
+    return http_protocol.GetDirectoryResponse(children=result.children)
 
 
 @endpoint(http_protocol.GET_FILE)
@@ -101,7 +102,7 @@ async def start_backup(session: ServerSession = Depends(cache.user_session), bac
 
 
 @endpoint(http_protocol.RESUME_BACKUP)
-def resume_backup(session: ServerSession = Depends(cache.user_session), session_id: UUID = None,
+async def resume_backup(session: ServerSession = Depends(cache.user_session), session_id: UUID = None,
                   backup_date: datetime = None) -> BackupSessionConfig:
     backup_session = await session.resume_backup(session_id=session_id, backup_date=backup_date)
     return backup_session.config
@@ -144,9 +145,9 @@ async def file_partial_size(resume_id: UUID, session: BackupSession = Depends(ca
 
 
 @endpoint(http_protocol.ADD_ROOT_DIR)
-async def add_root_directory(route_dir_name: str, inode: protocol.Inode,
+async def add_root_directory(root_dir_name: str, inode: protocol.Inode,
                              session: BackupSession = Depends(cache.backup_session)):
-    await session.add_root_dir(root_dir_name=route_dir_name, inode=inode)
+    await session.add_root_dir(root_dir_name=root_dir_name, inode=inode)
     return fastapi.Response(status_code=204)
 
 

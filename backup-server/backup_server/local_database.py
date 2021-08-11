@@ -1,13 +1,14 @@
 import hashlib
+import logging
 import os
 import shutil
-import logging
-import aiofiles
 from datetime import datetime, timezone
-from typing import Optional, Union, BinaryIO
-from pydantic import BaseModel
 from pathlib import Path
+from typing import Optional, Union, BinaryIO
 from uuid import UUID, uuid4
+
+import aiofiles
+from pydantic import BaseModel
 
 from . import protocol
 from .protocol import Inode, Directory, Backup, BackupSessionConfig
@@ -38,19 +39,17 @@ class LocalDatabase:
         with (self._base_path / _CONFIG_FILE).open('w') as file:
             file.write(self.config.json(indent=True))
 
-    def open_client_session(self, client_id: Optional[UUID] = None, client_name: Optional[str] = None
-                            ) -> "LocalDatabaseServerSession":
+    def open_client_session(self, client_id_or_name: str) -> protocol.ServerSession:
         try:
-            if client_name is not None:
-                # TODO change this for pathlib readlink once python 3.9 has bedded in.
-                client_id = UUID(os.readlink((self._base_path / self._CLIENT_DIR / client_name)))
-
-            client_path = self._base_path / self._CLIENT_DIR / client_id.hex
+            client_path = self._base_path / self._CLIENT_DIR / client_id_or_name
+            if client_path.is_symlink():
+                client_id = os.readlink(client_path)
+                client_path = self._base_path / self._CLIENT_DIR / client_id
 
             return LocalDatabaseServerSession(self, client_path)
         except FileNotFoundError:
-            logger.error(f"Session not found {client_name or client_id}")
-            raise protocol.SessionClosed(f"No such session {client_name or client_id}")
+            logger.error(f"Session not found {client_id_or_name}")
+            raise protocol.SessionClosed(f"No such session {client_id_or_name}")
         except OSError:
             logger.error(f"Could not load session", exc_info=True)
             raise protocol.InternalServerError()
@@ -105,7 +104,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
 
         if not allow_overwrite:
             if self._path_for_backup_date(backup_date).exists():
-                raise FileExistsError(f"Backup exists {backup_date.isoformat()}")
+                raise protocol.DuplicateBackup(f"Backup exists {backup_date.isoformat()}")
 
         backup_session_id = uuid4()
         backup_session_path = self._path_for_session_id(backup_session_id)
@@ -164,8 +163,8 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         if inode.type not in (protocol.FileType.REGULAR, protocol.FileType.LINK, protocol.FileType.PIPE):
             raise ValueError(f"Cannot read a file type {inode.type}")
         if target_path is not None:
-            async with self._database.store_path_for(inode.hash).open('rb') as content:
-                protocol.restore_file(target_path, inode, content, restore_owner, restore_permissions)
+            async with aiofiles.open(self._database.store_path_for(inode.hash), 'rb') as content:
+                await protocol.restore_file(target_path, inode, content, restore_owner, restore_permissions)
             return None
         else:
             result_path = self._database.store_path_for(inode.hash)
@@ -223,7 +222,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             raise protocol.SessionClosed()
         for name, child in definition.children.items():
             if child.hash is None:
-                raise ValueError(f"Child {name} has no hash value")
+                raise protocol.InvalidArgumentsError(f"Child {name} has no hash value")
 
         directory_hash, content = definition.hash()
         if self._object_exists(directory_hash):
@@ -291,7 +290,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             logger.debug(f"File already exists after upload {ref_hash}")
             temp_file.unlink()
         else:
-            logger.debug(f"File upload complete {temp_file}")
+            logger.debug(f"File upload complete {resume_id} as {ref_hash}")
             temp_file.rename(self._new_object_path_for(ref_hash))
         return ref_hash
 

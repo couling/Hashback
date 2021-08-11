@@ -1,15 +1,15 @@
 import enum
-import stat
 import hashlib
 import os
-import io
-import aiofiles.os
-from datetime import datetime, timedelta, timezone
-from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple, Coroutine
-from uuid import UUID, uuid4
-from pathlib import Path
+import stat
 from abc import abstractmethod
-from pydantic import BaseModel, Field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple
+from uuid import UUID, uuid4
+
+import aiofiles.os
+from pydantic import BaseModel, Field, validator
 
 # This will either get bumped, or the file will be duplicated and each one will have a VERSION.  In any case this file
 # specifies protocol version ...
@@ -63,7 +63,6 @@ class Inode(BaseModel):
 
     @classmethod
     def from_stat(cls, s, hash_value: Optional[str]) -> "Inode":
-        stat.S_IMODE()
         return Inode(
             mode=stat.S_IMODE(s.st_mode),
             type=cls._type(s.st_mode),
@@ -73,21 +72,6 @@ class Inode(BaseModel):
             modified_time=datetime.fromtimestamp(s.st_mtime),
             hash=hash_value,
         )
-
-
-class FileReader(Protocol):
-    @abstractmethod
-    async def read(self, n: Optional[int] = None) -> bytes:
-        pass
-
-    @abstractmethod
-    def close(self):
-        pass
-
-    @property
-    @abstractmethod
-    def file_size(self) -> int:
-        pass
 
 
 class DirectoryHash(NamedTuple):
@@ -122,6 +106,21 @@ class Backup(BaseModel):
     completed: datetime
     roots: Dict[str, Inode]
     description: Optional[str]
+
+
+class FileReader(Protocol):
+    @abstractmethod
+    async def read(self, n: int = None) -> bytes:
+        pass
+
+    @abstractmethod
+    def close(self):
+        pass
+
+    @property
+    @abstractmethod
+    def file_size(self) -> Optional[int]:
+        pass
 
 
 class DirectoryDefResponse(BaseModel):
@@ -191,6 +190,11 @@ class BackupSession(Protocol):
     @abstractmethod
     def config(self) -> BackupSessionConfig:
         """The settings for this backup session"""
+
+    @property
+    @abstractmethod
+    def server_session(self) -> "ServerSession":
+        """The server session this backup session is attached to"""
 
     @property
     @abstractmethod
@@ -348,9 +352,9 @@ class ServerSession(Protocol):
         """
 
 
-def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta):
+def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta, client_timezone: str):
     """
-    Normalize a backup date to the given granularity. EG if granularity is set to 1 day, the backup_date is set to
+    Normalize a backup date to the given granularity. EG: if granularity is set to 1 day, the backup_date is set to
     midnight of that same day.  If granularity is set to 1 hour, then backup_date is set to the start of that hour.
     """
     assert backup_date.tzinfo is not None
@@ -399,12 +403,20 @@ class SessionClosed(RequestException):
     http_status = 410  # Gone
 
 
+class DuplicateBackup(RequestException):
+    http_status = 409 # Conflict
+
+
 class ProtocolError(Exception):
     http_status: int = 400  # Bad request
 
 
 class InvalidArgumentsError(ProtocolError):
     http_status: int = 422  # Unprocessable entity
+
+
+class InvalidResponseError(ProtocolError):
+    http_status: int = 502  # Bad response from backend
 
 
 # Remote server-client interaction needs a way for the server to raise an exception with the client. Obviously we don't
@@ -423,17 +435,18 @@ class RemoteException(BaseModel):
     name: str
     message: str
 
+    @validator('name')
+    def _name_in_exceptions_by_name(cls, name: str) -> str:
+        if name not in EXCEPTIONS_BY_NAME:
+            raise ValueError(f"Invalid exception name: {name}", RemoteException)
+        return name
+
     @classmethod
     def from_exception(cls, exception: Union[ProtocolError, RequestException]) -> "RemoteException":
         return cls(name=EXCEPTIONS_BY_TYPE[type(exception)], message=str(exception))
 
     def exception(self) -> Union[RequestException, ProtocolError]:
-        try:
-            exception = EXCEPTIONS_BY_NAME[self.name]
-        except KeyError:
-            raise ProtocolError("Server attempted to raise an unknown exception on the client side:\n"
-                                f"Name: {self.name}\n"
-                                f"Message: {self.message}")
+        exception = EXCEPTIONS_BY_NAME[self.name]
         return exception(self.message)
 
 

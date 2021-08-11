@@ -1,4 +1,3 @@
-import uuid
 import fastapi.security
 
 from . import config
@@ -9,5 +8,5 @@ AUTHENTICATOR = {
 }[config.SERVER_SETTINGS.auth_type]()
 
 
-def get_client_id(credentials: fastapi.security.HTTPBasicCredentials) -> uuid.UUID:
-    return uuid.UUID(credentials.username)
+def get_client_id(credentials: fastapi.security.HTTPBasicCredentials) -> str:
+    return credentials.username

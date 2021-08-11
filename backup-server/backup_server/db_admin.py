@@ -1,11 +1,11 @@
-import logging
-import click
 import asyncio
-from typing import List, Optional
+import logging
 from datetime import datetime
 from pathlib import Path
-import dateutil.tz
+from typing import List, Optional
 
+import click
+import dateutil.tz
 
 from . import protocol, scanner
 from .local_database import LocalDatabase, Configuration

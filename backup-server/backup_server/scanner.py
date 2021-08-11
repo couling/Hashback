@@ -1,15 +1,14 @@
-import os
 import logging
-from typing import Optional
-from pathlib import Path
-from uuid import uuid4
+import os
 from asyncio import gather
-from typing import Dict, List
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List
+from typing import Optional
+from uuid import uuid4
 
 from . import protocol
 from .misc import str_exception
-
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +213,7 @@ class Scanner:
                 )
             ref_hash = directory.hash().ref_hash
 
-        logger.debug(f"Server accepted directory {path} as {server_response.ref_hash}")
+        logger.debug(f"Server accepted directory {path} as {ref_hash}")
         return ref_hash
 
     async def _upload_missing_file(self, path: Path, directory: protocol.Directory, missing_file: str):

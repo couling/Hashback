@@ -1,12 +1,11 @@
-import logging
+import asyncio
+import collections.abc
 import json
+import logging
 import os
 import signal
-import asyncio
-from typing import Union, Optional, Coroutine, Collection, Dict, Any
-import collections.abc
 from copy import deepcopy
-
+from typing import Union, Optional, Coroutine, Collection, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,7 @@ def setup_logging(default_level: int = logging.INFO):
     logger.debug(f"Logging configured to default level {logging.getLevelName(default_level)}")
 
     for logger_name, level_name in environ_log_levels().items():
-        log_level = logger.getLevelName(level_name)
+        log_level = logging.getLevelName(level_name)
         if not isinstance(log_level, int):
             logger.warning(f"Unknown log level name {level_name} in LOG_LEVELS")
         else:
@@ -56,9 +55,9 @@ def setup_logging(default_level: int = logging.INFO):
 
 def environ_log_levels() -> Dict:
     try:
-        result = json.loads(os.environ.get('LOG_LEVELS', ""))
-        if isinstance(result, dict):
-            return result
+        raw = json.loads(os.environ.get('LOG_LEVELS', ""))
+        if isinstance(raw, dict):
+            return {key: {'level': value} for key, value in raw.items()}
     except json.JSONDecodeError:
         pass
     return {}

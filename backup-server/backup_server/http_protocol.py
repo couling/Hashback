@@ -1,6 +1,8 @@
 import urllib.parse
 from typing import Optional, Dict, List, NamedTuple, Type, BinaryIO, Any
-from pydantic import BaseModel, validator
+
+from pydantic import BaseModel
+
 from . import protocol
 
 DEFAULT_PORT = 4649
@@ -19,7 +21,7 @@ class Endpoint(NamedTuple):
         result = self.url_stub
         if kwargs:
             kwargs = {key: urllib.parse.quote_plus(str(value)) for key, value in kwargs.items() if value is not None}
-            result = self.url_stub.format(*kwargs)
+            result = self.url_stub.format(**kwargs)
             if self.query_params:
                 query = {key: value for key, value in kwargs.items() if key in self.query_params}
                 if query:
@@ -99,13 +101,17 @@ class FilePartialSizeResponse(BaseModel):
         return self.__root__
 
 
+class GetDirectoryResponse(BaseModel):
+    children: Dict[str, protocol.Inode]
+
+
 HELLO = Endpoint('GET', '/', None, ServerVersion)
 
 # User Session
 USER_CLIENT_CONFIG = Endpoint('GET', '/about-me', None, protocol.ClientConfiguration)
 BACKUP_LATEST = Endpoint('GET', '/backups/latest', None, protocol.Backup)
 BACKUP_BY_DATE = Endpoint('GET', '/backups/{backup_date}', None, protocol.Backup)
-GET_DIRECTORY = Endpoint('GET', '/directory/{ref_hash}', None, protocol.Directory)
+GET_DIRECTORY = Endpoint('GET', '/directory/{ref_hash}', None, GetDirectoryResponse)
 GET_FILE = Endpoint('GET', "/file/{ref_hash}", None, BinaryIO)
 
 # Backup Session
@@ -119,4 +125,4 @@ UPLOAD_FILE = Endpoint('POST', '/backup-session/{session_id}/file', {'resume_id'
                        UploadFileContentResponse)
 FILE_PARTIAL_SIZE = Endpoint('GET', '/backup-session/{session_id}/file-partial-size', {'resume_id'},
                              FilePartialSizeResponse)
-ADD_ROOT_DIR = Endpoint('PUT', '/backup-session/{session_id}/roots/{route_dir_name}', None, None)
+ADD_ROOT_DIR = Endpoint('PUT', '/backup-session/{session_id}/roots/{root_dir_name}', None, None)
