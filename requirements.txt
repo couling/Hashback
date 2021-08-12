@@ -1,8 +1,0 @@
-pydantic
-click
-python-dateutil
-fastapi
-python-multipart
-asyncstdlib
-aiofiles
-requests

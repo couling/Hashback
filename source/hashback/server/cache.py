@@ -5,9 +5,9 @@ import asyncstdlib
 import fastapi
 from fastapi import Depends
 
-from backup_server import protocol
-from backup_server.server import config, security
-from backup_server.server.security import AUTHENTICATOR
+from hashback import protocol
+from hashback.server import config, security
+from hashback.server.security import AUTHENTICATOR
 
 
 @functools.lru_cache(maxsize=config.SERVER_SETTINGS.session_cache_size)

@@ -9,22 +9,28 @@ import dateutil.tz
 
 from . import protocol, scanner
 from .local_database import LocalDatabase, Configuration
-from .misc import run_then_cancel, str_exception
+from .misc import run_then_cancel, str_exception, setup_logging, register_clean_shutdown
 
 logger = logging.getLogger(__name__)
+
+
+def main():
+    register_clean_shutdown()
+    setup_logging()
+    click_main()
 
 
 @click.group()
 @click.option("--database", type=click.Path(path_type=Path, file_okay=False), default=".", envvar="BACKUP_DATABASE")
 @click.pass_context
-def main(ctx: click.Context, database: Path):
+def click_main(ctx: click.Context, database: Path):
     if ctx.invoked_subcommand != 'create':
         ctx.obj = LocalDatabase(database)
     else:
         ctx.obj = database
 
 
-@main.command('create')
+@click_main.command('create')
 @click.option("--backup-by", type=click.Choice(['date', 'timestamp'], case_sensitive=False), default="date")
 @click.option("--friendly-links/--flat", default=True)
 @click.option("--store-split-count", type=click.INT, default=2)
@@ -35,7 +41,7 @@ def create(database: Path, **db_config):
     LocalDatabase.create_database(base_path=database, configuration=config)
 
 
-@main.command('add-client')
+@click_main.command('add-client')
 @click.argument('CLIENT_NAME', envvar="CLIENT_NAME")
 @click.pass_obj
 def add_client(database: LocalDatabase, client_name: str):
@@ -49,7 +55,7 @@ def add_client(database: LocalDatabase, client_name: str):
     logger.info("Created client %s", config.client_id)
 
 
-@main.command('add-directory')
+@click_main.command('add-directory')
 @click.argument('CLIENT_NAME', envvar="CLIENT_NAME")
 @click.argument('ROOT_NAME')
 @click.argument('ROOT_PATH', type=click.Path(exists=True, file_okay=False, path_type=Path))
@@ -79,7 +85,7 @@ def add_directory(database: LocalDatabase, client_name: str, root_name: str, roo
     client.save_config()
 
 
-@main.command("migrate-backup")
+@click_main.command("migrate-backup")
 @click.argument('CLIENT_NAME', envvar="CLIENT_NAME")
 @click.argument('BASE_PATH', type=click.Path(path_type=Path, exists=True, file_okay=False))
 @click.option("--timestamp", type=click.DateTime(formats=['%Y-%m-%d', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']))
@@ -225,3 +231,7 @@ class BackupMigrationScanner(scanner.Scanner):
             except OSError as ex:
                 logger.error(f"Failed to create hardlink ({ex}) falling back to copying")
                 await super()._upload_missing_file(path, directory, missing_file)
+
+
+if __name__ == '__main__':
+    main()

@@ -7,20 +7,26 @@ from urllib.parse import urlparse
 import click
 import dateutil.tz
 
-from .misc import run_then_cancel
+from .misc import run_then_cancel, register_clean_shutdown, setup_logging
 from .protocol import ServerSession, DuplicateBackup
 from .scanner import Scanner
 
 logger = logging.getLogger(__name__)
 
 
+def main():
+    register_clean_shutdown()
+    setup_logging()
+    click_main()
+
+
 @click.group()
 @click.option("--database", envvar="BACKUP_DATABASE")
 @click.pass_context
-def main(ctx: click.Context, database: str):
+def click_main(ctx: click.Context, database: str):
     ctx.obj = select_database(database)
 
-@main.command("backup")
+@click_main.command("backup")
 @click.option("--timestamp", type=click.DateTime(formats=['%Y-%m-%d', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']))
 @click.option("--description")
 @click.option("--overwrite/--no-overwrite", default=False)

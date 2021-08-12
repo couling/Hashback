@@ -10,8 +10,8 @@ from uuid import UUID
 
 import requests.auth
 
-from backup_server import protocol, http_protocol
-from backup_server.protocol import Inode, Directory, DirectoryDefResponse, Backup, BackupSession, ClientConfiguration, \
+from hashback import protocol, http_protocol
+from hashback.protocol import Inode, Directory, DirectoryDefResponse, Backup, BackupSession, ClientConfiguration, \
     BackupSessionConfig
 
 
