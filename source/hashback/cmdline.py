@@ -75,3 +75,7 @@ def select_database(path: str) -> ServerSession:
         from  . import http_client, http_protocol
         server_properties = http_protocol.ServerProperties.parse_url(path)
         return run_then_cancel(http_client.BasicAuthClient.login(server_properties=server_properties))
+
+
+if __name__ == '__main__':
+    main()

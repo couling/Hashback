@@ -3,10 +3,12 @@ import hashlib
 import os
 import stat
 from abc import abstractmethod
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple
+from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple, Collection, Tuple
 from uuid import UUID, uuid4
+import dateutil.tz
+
 
 import aiofiles.os
 from pydantic import BaseModel, Field, validator
@@ -69,7 +71,7 @@ class Inode(BaseModel):
             size=s.st_size,
             uid=s.st_uid,
             gid=s.st_gid,
-            modified_time=datetime.fromtimestamp(s.st_mtime),
+            modified_time=datetime.fromtimestamp(s.st_mtime, timezone.utc),
             hash=hash_value,
         )
 
@@ -124,6 +126,9 @@ class FileReader(Protocol):
 
 
 class DirectoryDefResponse(BaseModel):
+    # This will be set on success but not on error
+    ref_hash: Optional[str]
+
     # If defining the directory could not complete because children were missing, the name (not path) of each missing
     # file will be added to missing_files.
     missing_files: List[str] = []
@@ -170,6 +175,13 @@ class ClientConfiguration(BaseModel):
 
     # backup
     backup_directories: Dict[str, ClientConfiguredBackupDirectory] = Field(default_factory=dict)
+
+    # Timezone
+    named_timezone: str = Field("Etc/UTC")
+
+    @property
+    def timezone(self) -> tzinfo:
+        return dateutil.tz.gettz(self.named_timezone)
 
 
 class BackupSessionConfig(BaseModel):
@@ -321,6 +333,21 @@ class ServerSession(Protocol):
         """
 
     @abstractmethod
+    async def list_backup_sessions(self) -> List[BackupSessionConfig]:
+        """
+        Fetch a list of backup sessions.  Since the list of open sessions is generally very small, this will return
+        the details of each one.
+        """
+
+    @abstractmethod
+    async def list_backups(self) -> List[Tuple[datetime, str]]:
+        """
+        Fetch list of completed backups.  Typically the number of backups can stack up very large so this only returns
+        the key for each backup (the datetime) and a name.
+        :return: List of backups, keyed by datetime
+        """
+
+    @abstractmethod
     async def get_backup(self, backup_date: Optional[datetime] = None) -> Optional[Backup]:
         """
         Fetch the details of a completed backup.
@@ -350,41 +377,6 @@ class ServerSession(Protocol):
         :return: If target_path is None then the file content will be returned as a bytes object.  If target_path is
             not None then None is returned.
         """
-
-
-def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta, client_timezone: str):
-    """
-    Normalize a backup date to the given granularity. EG: if granularity is set to 1 day, the backup_date is set to
-    midnight of that same day.  If granularity is set to 1 hour, then backup_date is set to the start of that hour.
-    """
-    assert backup_date.tzinfo is not None
-    timestamp = backup_date.timestamp()
-    timestamp -= timestamp % backup_granularity.total_seconds()
-    return datetime.fromtimestamp(timestamp, timezone.utc)
-
-
-def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
-    """
-    Generate an sha256sum for the given content.  Yes this is absolutely part of the protocol!
-    Either the server or client can hash the same file and the result MUST match on both sides or things will break.
-    """
-    h = hashlib.sha256()
-    if isinstance(content, bytes):
-        h.update(content)
-    elif isinstance(content, str):
-        h.update(content.encode("utf-8"))
-    elif isinstance(content, Path):
-        with content.open('rb') as file:
-            bytes_read = file.read(409600)
-            while bytes_read:
-                h.update(bytes_read)
-                bytes_read = file.read(409600)
-    else:
-        bytes_read = content.read(409600)
-        while bytes_read:
-            h.update(bytes_read)
-            bytes_read = content.read(409600)
-    return h.hexdigest()
 
 
 class RequestException(Exception):
@@ -448,6 +440,41 @@ class RemoteException(BaseModel):
     def exception(self) -> Union[RequestException, ProtocolError]:
         exception = EXCEPTIONS_BY_NAME[self.name]
         return exception(self.message)
+
+
+def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta, client_timezone: tzinfo):
+    """
+    Normalize a backup date to the given granularity. EG: if granularity is set to 1 day, the backup_date is set to
+    midnight of that same day.  If granularity is set to 1 hour, then backup_date is set to the start of that hour.
+    """
+    assert backup_date.tzinfo is not None
+    timestamp = backup_date.timestamp()
+    timestamp -= timestamp % backup_granularity.total_seconds()
+    return datetime.fromtimestamp(timestamp, timezone.utc)
+
+
+def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
+    """
+    Generate an sha256sum for the given content.  Yes this is absolutely part of the protocol!
+    Either the server or client can hash the same file and the result MUST match on both sides or things will break.
+    """
+    h = hashlib.sha256()
+    if isinstance(content, bytes):
+        h.update(content)
+    elif isinstance(content, str):
+        h.update(content.encode("utf-8"))
+    elif isinstance(content, Path):
+        with content.open('rb') as file:
+            bytes_read = file.read(READ_SIZE)
+            while bytes_read:
+                h.update(bytes_read)
+                bytes_read = file.read(READ_SIZE)
+    else:
+        bytes_read = content.read(READ_SIZE)
+        while bytes_read:
+            h.update(bytes_read)
+            bytes_read = content.read(READ_SIZE)
+    return h.hexdigest()
 
 
 async def restore_file(file_path: Path, inode: Inode, content: FileReader, restore_owner: bool, restore_permissions):

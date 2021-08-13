@@ -10,7 +10,7 @@ from ..misc import register_clean_shutdown, merge, environ_log_levels, DEFAULT_L
 
 
 @click.command()
-@click.option("--host", default=["localhost"], multiple=True)
+@click.option("--host", default=["::1", "127.0.0.1"], multiple=True)
 @click.option("--port", type=click.INT, default=8000)
 def main(host: List[str], port: int):
     register_clean_shutdown()

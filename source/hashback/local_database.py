@@ -4,7 +4,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Union, BinaryIO
+from typing import Optional, Union, BinaryIO, List, Tuple
 from uuid import UUID, uuid4
 
 import aiofiles
@@ -39,7 +39,7 @@ class LocalDatabase:
         with (self._base_path / _CONFIG_FILE).open('w') as file:
             file.write(self.config.json(indent=True))
 
-    def open_client_session(self, client_id_or_name: str) -> protocol.ServerSession:
+    def open_client_session(self, client_id_or_name: str) -> "LocalDatabaseServerSession":
         try:
             client_path = self._base_path / self._CLIENT_DIR / client_id_or_name
             if client_path.is_symlink():
@@ -63,8 +63,8 @@ class LocalDatabase:
     def create_client(self, client_config: protocol.ClientConfiguration) -> protocol.ServerSession:
         (self._base_path / self._CLIENT_DIR).mkdir(exist_ok=True, parents=True)
         client_name_path = self._base_path / self._CLIENT_DIR / client_config.client_name
-        client_name_path.symlink_to(client_config.client_id.hex)
-        client_path = self._base_path / self._CLIENT_DIR / client_config.client_id.hex
+        client_name_path.symlink_to(str(client_config.client_id))
+        client_path = self._base_path / self._CLIENT_DIR / str(client_config.client_id)
         client_path.mkdir(exist_ok=False, parents=True)
         with (client_path / _CONFIG_FILE).open('w') as file:
             file.write(client_config.json(indent=True))
@@ -100,7 +100,8 @@ class LocalDatabaseServerSession(protocol.ServerSession):
 
     async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False,
                            description: Optional[str] = None) -> protocol.BackupSession:
-        backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity)
+        backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity,
+                                                     self.client_config.timezone)
 
         if not allow_overwrite:
             if self._path_for_backup_date(backup_date).exists():
@@ -129,7 +130,8 @@ class LocalDatabaseServerSession(protocol.ServerSession):
 
         elif backup_date is not None:
             # This is inefficient if there are a lot of sessions but it get's the job done.
-            backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity)
+            backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity,
+                                                         self.client_config.timezone)
             for session_path in (self._client_path / self._SESSIONS).iterdir():
                 session = LocalDatabaseBackupSession(self, session_path)
                 if session.backup_date == backup_date:
@@ -139,6 +141,23 @@ class LocalDatabaseServerSession(protocol.ServerSession):
 
         raise ValueError("Either session_id or backup_date must be specified but neither were")
 
+    async def list_backup_sessions(self) -> List[protocol.BackupSessionConfig]:
+        results = []
+        for backup in (self._client_path / self._SESSIONS).iterdir():
+            with (backup / _CONFIG_FILE).open('r') as file:
+                backup_config = protocol.BackupSessionConfig.parse_raw(file.read())
+            results.append(backup_config)
+        return results
+
+
+    async def list_backups(self) -> List[Tuple[datetime, str]]:
+        results = []
+        for backup in (self._client_path / self._BACKUPS).iterdir():
+            with backup.open('r') as file:
+                backup_config = protocol.Backup.parse_raw(file.read())
+            results.append((backup_config.backup_date, backup_config.description))
+        return results
+
     async def get_backup(self, backup_date: Optional[datetime] = None) -> Optional[Backup]:
         if backup_date is None:
             try:
@@ -147,7 +166,8 @@ class LocalDatabaseServerSession(protocol.ServerSession):
                 logger.warning(f"No backup found for {self.client_config.client_name} ({self.client_config.client_id})")
                 return None
         else:
-            backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity)
+            backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity,
+                                                         self.client_config.timezone)
             backup_path = self._path_for_backup_date(backup_date)
         with backup_path.open('r') as file:
             return protocol.Backup.parse_raw(file.read())
@@ -183,7 +203,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         return self._client_path / self._BACKUPS / (backup_date.strftime(self._TIMESTMAP_FORMAT) + '.json')
 
     def _path_for_session_id(self, session_id: UUID) -> Path:
-        return self._client_path / self._SESSIONS / session_id.hex
+        return self._client_path / self._SESSIONS / str(session_id)
 
 
 class LocalDatabaseBackupSession(protocol.BackupSession):
@@ -245,8 +265,9 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             except:
                 tmp_path.unlink()
                 raise
+
         # Success
-        return protocol.DirectoryDefResponse()
+        return protocol.DirectoryDefResponse(ref_hash=directory_hash)
 
     async def upload_file_content(self, file_content: Union[Path, BinaryIO], resume_id: UUID,
                                   resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
@@ -353,7 +374,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     def _temp_path(self, resume_id: Optional[UUID] = None) -> Path:
         if resume_id is None:
             resume_id = uuid4()
-        return self._session_path / self._PARTIAL / resume_id.hex
+        return self._session_path / self._PARTIAL / str(resume_id)
 
     def _new_object_path_for(self, ref_hash: str) -> Path:
         return self._session_path / self._NEW_OBJECTS / ref_hash
