@@ -113,16 +113,22 @@ class Backup(BaseModel):
 class FileReader(Protocol):
     @abstractmethod
     async def read(self, n: int = None) -> bytes:
-        pass
+        """
+        Read n bytes from the source. If N < 0 read all bytes to the EOF before returning.
+        """
 
     @abstractmethod
     def close(self):
-        pass
+        """
+        Close the handle to the underlying source.
+        """
 
     @property
     @abstractmethod
     def file_size(self) -> Optional[int]:
-        pass
+        """
+        Get the size of this file. May be Null if the item is a pipe or socket.
+        """
 
 
 class DirectoryDefResponse(BaseModel):
@@ -303,7 +309,10 @@ class ServerSession(Protocol):
     @property
     @abstractmethod
     def client_config(self) -> ClientConfiguration:
-        pass
+        """
+        Client confic is stored remotely on the server so that it can be centrally managed for all nodes.
+        Clients read this field to discover what they should back up etc.
+        """
 
     @abstractmethod
     async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False, description: Optional[str] = None
