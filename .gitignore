@@ -4,3 +4,6 @@ venv
 test_db
 **.egg-info
 .coverage
+.eggs
+.venv
+dist
