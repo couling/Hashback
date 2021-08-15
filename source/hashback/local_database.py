@@ -128,7 +128,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
             backup_path = self._path_for_session_id(session_id)
             return LocalDatabaseBackupSession(self, backup_path)
 
-        elif backup_date is not None:
+        if backup_date is not None:
             # This is inefficient if there are a lot of sessions but it get's the job done.
             backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity,
                                                          self.client_config.timezone)
@@ -182,16 +182,17 @@ class LocalDatabaseServerSession(protocol.ServerSession):
                        restore_permissions: bool = False, restore_owner: bool = False) -> Optional[protocol.FileReader]:
         if inode.type not in (protocol.FileType.REGULAR, protocol.FileType.LINK, protocol.FileType.PIPE):
             raise ValueError(f"Cannot read a file type {inode.type}")
+
         if target_path is not None:
             async with aiofiles.open(self._database.store_path_for(inode.hash), 'rb') as content:
                 await protocol.restore_file(target_path, inode, content, restore_owner, restore_permissions)
             return None
-        else:
-            result_path = self._database.store_path_for(inode.hash)
-            result_size = result_path.stat().st_size
-            result = await aiofiles.open(self._database.store_path_for(inode.hash),"rb")
-            result.file_size = result_size
-            return result
+
+        result_path = self._database.store_path_for(inode.hash)
+        result_size = result_path.stat().st_size
+        result = await aiofiles.open(self._database.store_path_for(inode.hash),"rb")
+        result.file_size = result_size
+        return result
 
     def complete_backup(self, meta: protocol.Backup, overwrite: bool):
         backup_path = self._path_for_backup_date(meta.backup_date)

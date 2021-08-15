@@ -70,12 +70,12 @@ def select_database(path: str) -> ServerSession:
         logger.debug("Loading local database plugin")
         import local_database
         return local_database.LocalDatabase(Path(path)).open_client_session(client_id_or_name=url.username)
-    elif url.scheme == 'http' or url.scheme =='https':
+    if url.scheme == 'http' or url.scheme =='https':
         logger.debug("Loading http client plugin")
         from  . import http_client, http_protocol
         server_properties = http_protocol.ServerProperties.parse_url(path)
         return run_then_cancel(http_client.BasicAuthClient.login(server_properties=server_properties))
-
+    raise ValueError(f"Unknown scheme {url.scheme}")
 
 if __name__ == '__main__':
     main()

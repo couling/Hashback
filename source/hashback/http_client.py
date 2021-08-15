@@ -59,8 +59,7 @@ class ClientSession(protocol.ServerSession):
     async def get_backup(self, backup_date: Optional[datetime] = None) -> Optional[Backup]:
         if backup_date is None:
             return await self._client.request(http_protocol.BACKUP_LATEST)
-        else:
-            return await self._client.request(http_protocol.BACKUP_BY_DATE, backup_date=backup_date)
+        return await self._client.request(http_protocol.BACKUP_BY_DATE, backup_date=backup_date)
 
     async def get_directory(self, inode: Inode) -> Directory:
         if inode.type != protocol.FileType.DIRECTORY:

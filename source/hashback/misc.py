@@ -88,8 +88,7 @@ def run_then_cancel(future: Optional[Union[asyncio.Future, Coroutine]] = None,
     try:
         if future is None:
             return loop.run_forever()
-        else:
-            return loop.run_until_complete(future)
+        return loop.run_until_complete(future)
     finally:
         # There can still be running tasks on the event loop at this point.
         # Either 'future' has completed but other tasks on the loop have not, or some exception tripped us out of

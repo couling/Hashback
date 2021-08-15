@@ -467,23 +467,23 @@ def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
     Generate an sha256sum for the given content.  Yes this is absolutely part of the protocol!
     Either the server or client can hash the same file and the result MUST match on both sides or things will break.
     """
-    h = hashlib.sha256()
+    hash_object = hashlib.sha256()
     if isinstance(content, bytes):
-        h.update(content)
+        hash_object.update(content)
     elif isinstance(content, str):
-        h.update(content.encode("utf-8"))
+        hash_object.update(content.encode("utf-8"))
     elif isinstance(content, Path):
         with content.open('rb') as file:
             bytes_read = file.read(READ_SIZE)
             while bytes_read:
-                h.update(bytes_read)
+                hash_object.update(bytes_read)
                 bytes_read = file.read(READ_SIZE)
     else:
         bytes_read = content.read(READ_SIZE)
         while bytes_read:
-            h.update(bytes_read)
+            hash_object.update(bytes_read)
             bytes_read = content.read(READ_SIZE)
-    return h.hexdigest()
+    return hash_object.hexdigest()
 
 
 async def restore_file(file_path: Path, inode: Inode, content: FileReader, restore_owner: bool, restore_permissions):
