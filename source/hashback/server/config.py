@@ -12,7 +12,9 @@ class Settings(BaseModel):
     host: str = "localhost"
     auth_type: str = 'basic'
 
-
-SERVER_SETTINGS = Settings.parse_file("./settings.json")
-
-LOCAL_DATABASE = local_database.LocalDatabase(Path(SERVER_SETTINGS.database_path))
+try:
+    SERVER_SETTINGS = Settings.parse_file("./settings.json")
+    LOCAL_DATABASE = local_database.LocalDatabase(Path(SERVER_SETTINGS.database_path))
+except FileNotFoundError:
+    SERVER_SETTINGS = Settings(database_path="/not-configured")
+    LOCAL_DATABASE = None

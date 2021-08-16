@@ -5,7 +5,7 @@ from datetime import datetime
 from io import BytesIO
 from os import SEEK_SET, SEEK_END
 from pathlib import Path
-from typing import Optional, BinaryIO, Union, Protocol, Any, Dict
+from typing import Optional, BinaryIO, Union, Protocol, Any, Dict, List, Tuple
 from uuid import UUID
 
 import requests.auth
@@ -16,13 +16,21 @@ from hashback.protocol import Inode, Directory, DirectoryDefResponse, Backup, Ba
 
 
 class Client(Protocol):
-    @classmethod
-    @abc.abstractmethod
-    async def login(cls, server: http_protocol.ServerProperties) -> "ClientSession":
-        pass
 
     @abc.abstractmethod
     async def request(self, endpoint: http_protocol.Endpoint, body = None, **params: Any):
+        pass
+
+    @abc.abstractmethod
+    def close(self):
+        pass
+
+    @abc.abstractmethod
+    def __enter__(self):
+        pass
+
+    @abc.abstractmethod
+    def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
 
@@ -41,6 +49,14 @@ class ClientSession(protocol.ServerSession):
     @property
     def client_config(self) -> ClientConfiguration:
         return self._client_config
+
+    async def list_backup_sessions(self) -> List[BackupSessionConfig]:
+        # TODO
+        raise NotImplementedError()
+
+    async def list_backups(self) -> List[Tuple[datetime, str]]:
+        # TODO
+        raise NotImplementedError()
 
     async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False,
                            description: Optional[str] = None) -> BackupSession:
@@ -155,15 +171,6 @@ class BasicAuthClient(Client):
     _server_version: http_protocol.ServerVersion
     _executor: Executor
     _http_session: requests.Session
-
-    @classmethod
-    async def login(cls, server: http_protocol.ServerProperties) -> ClientSession:
-        client = cls(server)
-        try:
-            return await ClientSession.create_session(client)
-        except:
-            client.close()
-            raise
 
     def __init__(self, server: http_protocol.ServerProperties):
         super().__init__()

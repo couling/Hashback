@@ -453,7 +453,7 @@ def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta, 
     assert backup_date.tzinfo is not None
     timestamp = backup_date.timestamp()
     timestamp -= timestamp % backup_granularity.total_seconds()
-    return datetime.fromtimestamp(timestamp, timezone.utc)
+    return datetime.fromtimestamp(timestamp, client_timezone)
 
 
 def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
