@@ -1,3 +1,4 @@
+# pylint: disable=protected-access
 import hashlib
 import logging
 import os
@@ -47,12 +48,12 @@ class LocalDatabase:
                 client_path = self._base_path / self._CLIENT_DIR / client_id
 
             return LocalDatabaseServerSession(self, client_path)
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
             logger.error(f"Session not found {client_id_or_name}")
-            raise protocol.SessionClosed(f"No such session {client_id_or_name}")
-        except OSError:
-            logger.error(f"Could not load session", exc_info=True)
-            raise protocol.InternalServerError()
+            raise protocol.SessionClosed(f"No such session {client_id_or_name}") from exc
+        except OSError as exc:
+            logger.error("Could not load session", exc_info=True)
+            raise protocol.InternalServerError() from exc
 
     def store_path_for(self, ref_hash: str) -> Path:
         split_size = self.config.store_split_size
@@ -89,6 +90,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
     client_config: protocol.ClientConfiguration = None
 
     def __init__(self, database: LocalDatabase, client_path: Path):
+        super().__init__()
         self._database = database
         self._client_path = client_path
         with (client_path / _CONFIG_FILE).open('r') as file:
@@ -214,13 +216,14 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     _ROOTS = 'roots'
 
     def __init__(self, client_session: LocalDatabaseServerSession, session_path: Path):
+        super().__init__()
         self._server_session = client_session
         self._session_path = session_path
         try:
             with (session_path / _CONFIG_FILE).open('r') as file:
                 self._config = protocol.BackupSessionConfig.parse_raw(file.read())
-        except FileNotFoundError as ex:
-            raise protocol.SessionClosed(session_path.name) from ex
+        except FileNotFoundError as exc:
+            raise protocol.SessionClosed(session_path.name) from exc
         (session_path / self._NEW_OBJECTS).mkdir(exist_ok=True, parents=True)
         (session_path / self._ROOTS).mkdir(exist_ok=True, parents=True)
         (session_path / self._PARTIAL).mkdir(exist_ok=True, parents=True)
@@ -274,7 +277,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                                   resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
         if not self.is_open:
             raise protocol.SessionClosed()
-        h = hashlib.sha256()
+        hash_object = hashlib.sha256()
         temp_file = self._temp_path(resume_id)
         if isinstance(file_content, Path):
             file_content = file_content.open('rb')
@@ -289,7 +292,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                         bytes_read = target.read(max(protocol.READ_SIZE, resume_from - target.tell()))
                         if not bytes_read:
                             bytes_read = bytes(max(protocol.READ_SIZE, resume_from - target.tell()))
-                        h.update(bytes_read)
+                        hash_object.update(bytes_read)
             # In the event this is a partial file we may not end up with our current position in the right place
             # because resume_from > partial file length.  seek will put us in the right position.
             if resume_from > 0:
@@ -298,7 +301,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             # Write the file content
             bytes_read = file_content.read(protocol.READ_SIZE)
             while bytes_read:
-                h.update(bytes_read)
+                hash_object.update(bytes_read)
                 target.write(bytes_read)
                 bytes_read = file_content.read(protocol.READ_SIZE)
 
@@ -306,7 +309,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             return None
 
         # Move the temporary file to new_objects named as it's hash
-        ref_hash = h.hexdigest()
+        ref_hash = hash_object.hexdigest()
         if self._object_exists(ref_hash):
             # Theoretically this
             logger.debug(f"File already exists after upload {ref_hash}")

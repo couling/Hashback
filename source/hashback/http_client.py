@@ -29,6 +29,7 @@ class Client(Protocol):
 class ClientSession(protocol.ServerSession):
 
     def __init__(self, client: Client, client_config: http_protocol.USER_CLIENT_CONFIG):
+        super().__init__()
         self._client = client
         self._client_config = client_config
 
@@ -85,7 +86,9 @@ class ClientSession(protocol.ServerSession):
 
 
 class ClientBackupSession(protocol.BackupSession):
+
     def __init__(self, client_session: ClientSession, config: BackupSessionConfig):
+        super().__init__()
         self._client_session = client_session
         self._config = config
         self._client = client_session._client
@@ -107,7 +110,11 @@ class ClientBackupSession(protocol.BackupSession):
         return await self._client.request(endpoint, body, session_id=self._config.session_id, **params)
 
     async def directory_def(self, definition: Directory, replaces: Optional[UUID] = None) -> DirectoryDefResponse:
-        result: DirectoryDefResponse = await self._request(http_protocol.DIRECTORY_DEF, body=definition, replaces=replaces)
+        result: DirectoryDefResponse = await self._request(
+            endpoint=http_protocol.DIRECTORY_DEF,
+            body=definition,
+            replaces=replaces,
+        )
         if result.success:
             assert result.missing_ref is None
             # TODO considder adding ref_hash into DirectoryDefResponse
@@ -150,8 +157,8 @@ class BasicAuthClient(Client):
     _http_session: requests.Session
 
     @classmethod
-    async def login(cls, server_properties: http_protocol.ServerProperties) -> ClientSession:
-        client = cls(server_properties)
+    async def login(cls, server: http_protocol.ServerProperties) -> ClientSession:
+        client = cls(server)
         try:
             return await ClientSession.create_session(client)
         except:
@@ -159,6 +166,7 @@ class BasicAuthClient(Client):
             raise
 
     def __init__(self, server: http_protocol.ServerProperties):
+        super().__init__()
         self._auth = requests.auth.HTTPBasicAuth(username=server.username, password=server.password)
         server_path = server.copy()
         server_path.username = None
@@ -174,50 +182,28 @@ class BasicAuthClient(Client):
         return await asyncio.get_running_loop().run_in_executor(
             self._executor, self._request_object, endpoint, params, body)
 
-    def _request_object(self, endpoint: http_protocol.Endpoint, params: Dict[str, Any], body = None, ):
+    def _request_object(self, endpoint: http_protocol.Endpoint, params: Dict[str, Any], body = None):
+        response = self._send_request(endpoint, params, body)
+        return self._parse_response(endpoint, response)
+
+    def _send_request(self,  endpoint: http_protocol.Endpoint, params: Dict[str, Any],
+                      body = None) -> requests.Response:
         url = endpoint.format_url(self._base_url, params)
         stream_response = isinstance(endpoint.result_type, BinaryIO)
 
         if body is None:
-            response = self._send_request(endpoint.method, url, stream_response)
-        elif isinstance(body, Path):
+            return self._send_raw_request(endpoint.method, url, stream_response)
+        if isinstance(body, Path):
             with body.open('rb') as file:
-                response = self._send_request(endpoint.method, url, stream_response, files={'file': file})
-        elif isinstance(body, bytes):
-            response = self._send_request(endpoint.method, url, stream_response, files={'file': body})
-        elif hasattr(body, 'json'):
-            response = self._send_request(endpoint.method, url, stream_response, data=body.json().encode(),
+                return self._send_raw_request(endpoint.method, url, stream_response, files={'file': file})
+        if isinstance(body, bytes):
+            return self._send_raw_request(endpoint.method, url, stream_response, files={'file': body})
+        if hasattr(body, 'json'):
+            return self._send_raw_request(endpoint.method, url, stream_response, data=body.json().encode(),
                                           headers={'Content-Type': 'application/json'})
-        else:
-            raise ValueError(f"Cannot send body type {type(body).__name__}")
+        raise ValueError(f"Cannot send body type {type(body).__name__}")
 
-        result = None
-        try:
-            if endpoint.result_type is None:
-                pass  # result = None
-            elif isinstance(endpoint.result_type, BinaryIO):
-                result = RequestResponse(response, self._executor)
-            elif hasattr(endpoint.result_type, 'parse_raw'):
-                result = endpoint.result_type.parse_raw(response.content)
-            else:
-                raise ValueError(f'Cannot parse result type {endpoint.result_type.__name__}')
-
-        finally:
-            if not isinstance(result, RequestResponse):
-                # If we need to close the result, it might not be a good idea to close without reading the content
-                # This results in closing the connection which may slow down future requests.  If the Content-Length
-                # header shows less than 10KB, we read the content and leave the connection open by consuming the body.
-                # This has not been performance tuned: 10KB is a guess.
-                try:
-                    if int(response.headers['Content-Length']) <= 10240:
-                        _ = response.content
-                except Exception:
-                    # Honestly we really don't care if / why the above failed.
-                    pass
-                response.close()
-        return result
-
-    def _send_request(self, method: str, url: str, stream_response: bool, **kwargs) -> requests.Response:
+    def _send_raw_request(self, method: str, url: str, stream_response: bool, **kwargs) -> requests.Response:
         response = self._http_session.request(method, url, stream=stream_response, auth=self._auth, **kwargs)
 
         if response.status_code >= 400:
@@ -244,6 +230,33 @@ class BasicAuthClient(Client):
 
         return response
 
+    def _parse_response(self, endpoint: http_protocol.Endpoint, server_response: requests.Response):
+        result = None
+        try:
+            if endpoint.result_type is None:
+                pass  # result = None
+            elif isinstance(endpoint.result_type, BinaryIO):
+                result = RequestResponse(server_response, self._executor)
+            elif hasattr(endpoint.result_type, 'parse_raw'):
+                result = endpoint.result_type.parse_raw(server_response.content)
+            else:
+                raise ValueError(f'Cannot parse result type {endpoint.result_type.__name__}')
+
+        finally:
+            if not isinstance(result, RequestResponse):
+                # If we need to close the result, it might not be a good idea to close without reading the content
+                # This results in closing the connection which may slow down future requests.  If the Content-Length
+                # header shows less than 10KB, we read the content and leave the connection open by consuming the body.
+                # This has not been performance tuned: 10KB is a guess.
+                try:
+                    if int(server_response.headers['Content-Length']) <= 10240:
+                        _ = server_response.content
+                except IOError:
+                    # Honestly we really don't care if / why the above failed.
+                    pass
+                server_response.close()
+        return result
+
     def close(self):
         self._executor.shutdown(wait=False)
         self._http_session.close()
@@ -256,15 +269,16 @@ class BasicAuthClient(Client):
 
 class RequestResponse(protocol.FileReader):
     def __init__(self, response: requests.Response, executor: Executor):
+        super().__init__()
         self._response = response
         self._content = self._response.iter_content(protocol.READ_SIZE)
         self._cached_content = BytesIO()
         self._executor = executor
 
-    async def read(self, n: int = None) -> bytes:
-        if n < 0:
+    async def read(self, num_bytes: int = None) -> bytes:
+        if num_bytes < 0:
             return await asyncio.get_running_loop().run_in_executor(self._executor, self._read_all)
-        return await asyncio.get_running_loop().run_in_executor(self._executor, self._read_partial, n)
+        return await asyncio.get_running_loop().run_in_executor(self._executor, self._read_partial, num_bytes)
 
     def _read_all(self) -> bytes:
         current_pos = self._cached_content.tell()
@@ -274,14 +288,14 @@ class RequestResponse(protocol.FileReader):
         self._cached_content.seek(current_pos, SEEK_SET)
         return self._cached_content.read(self._cached_content.getbuffer().nbytes - current_pos)
 
-    def _read_partial(self, n: int) -> bytes:
-        result = self._cached_content.read(n)
+    def _read_partial(self, num_bytes: int) -> bytes:
+        result = self._cached_content.read(num_bytes)
         if not result:
             try:
                 self._cached_content = BytesIO(next(self._content))
             except StopIteration:
                 return bytes()
-            result = self._cached_content.read(n)
+            result = self._cached_content.read(num_bytes)
         return result
 
     def close(self):

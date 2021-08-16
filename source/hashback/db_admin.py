@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import click
 import dateutil.tz
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 def main():
     register_clean_shutdown()
     setup_logging()
+    # pylint: disable=no-value-for-parameter
     click_main()
 
 
@@ -62,8 +63,7 @@ def add_client(database: LocalDatabase, client_name: str):
 @click.option('--include', type=click.Path(path_type=Path), multiple=True)
 @click.option('--exclude', type=click.Path(path_type=Path), multiple=True)
 @click.pass_obj
-def add_directory(database: LocalDatabase, client_name: str, root_name: str, root_path: Path,
-                  include: List[Path], exclude: List[Path]):
+def add_directory(database: LocalDatabase, client_name: str, root_name: str, root_path: Path, **options):
     def normalize(path: Path) -> str:
         if path.is_absolute():
             return str(path.relative_to(root_path))
@@ -71,16 +71,16 @@ def add_directory(database: LocalDatabase, client_name: str, root_name: str, roo
 
     # Normalize paths correctly
     root_path = Path(root_path).absolute()
-    include = [normalize(path) for path in include]
-    exclude = [normalize(path) for path in exclude]
+    include = [normalize(path) for path in options['include']]
+    exclude = [normalize(path) for path in options['exclude']]
     root_path = str(root_path)
 
-    client = database.open_client_session(client_name=client_name)
+    client = database.open_client_session(client_id_or_name=client_name)
     new_dir = protocol.ClientConfiguredBackupDirectory(base_path=root_path)
     for path in include:
-        new_dir.filters.append(protocol.Filter(protocol.FilterType.INCLUDE, path))
+        new_dir.filters.append(protocol.Filter(filter=protocol.FilterType.INCLUDE, path=path))
     for path in exclude:
-        new_dir.filters.append(protocol.Filter(protocol.FilterType.EXCLUDE, path))
+        new_dir.filters.append(protocol.Filter(filter=protocol.FilterType.EXCLUDE, path=path))
     client.client_config.backup_directories[root_name] = new_dir
     client.save_config()
 
@@ -95,57 +95,16 @@ def add_directory(database: LocalDatabase, client_name: str, root_name: str, roo
 @click.option("--hardlinks/--no-hardlinks", default=False)
 @click.option("--fast-unsafe/-safe", default=False)
 @click.pass_obj
-def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, hardlinks: bool, fast_unsafe: bool,
-                   timestamp: datetime, infer_timestamp: bool, description: Optional[str], accept_warning: bool):
-    server_session = database.open_client_session(client_name=client_name)
+def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, timestamp: datetime,
+                   description: Optional[str], **options: bool):
+    server_session = database.open_client_session(client_id_or_name=client_name)
     base_path = base_path.absolute()
 
-    if not accept_warning:
-        warning_message = "WARNING! migrate-backup is DANGEROUS! Make sure you understand it first.\n\n"
-        if hardlinks:
-            warning_message += (
-                "--hardlinks ... Changing the migrated files after migration WILL CORRUPT YOUR BACKUP DATABASE. "
-                "  Hardlinks are fast but hardlinks are DANGEROUS.\n"
-                "To avoid corruption you are advised either to use --no-hardlinks (creating a copy) or consider "
-                "deleting the original after migration.\n\n"
-            )
-
-        if infer_timestamp:
-            try:
-                timestamps = ', '.join(sorted(datetime.fromisoformat(path.name).isoformat()
-                                              for path in base_path.iterdir()))
-            except Exception as ex:
-                logger.error(f"Unable to determine list because of error: {str_exception(ex)}")
-                timestamps = f"Unable to determine list because of error: {str_exception(ex)}"
-
-            warning_message += (
-                "--infer-timestamp will use an iso formatted timestamp or date in the file path to infer multiple "
-                "backup dates.  The full list of backups migrated will be:\n"
-            )
-            warning_message += timestamps
-            warning_message += "\n\n"
-
-        warning_message += "You have configured the following directories to be migrated:\n"
-
-        for directory in server_session.client_config.backup_directories.values():
-            if infer_timestamp:
-                warning_message += f"{base_path / '<timestamp>' / Path(*Path(directory.base_path).parts[1:])}\n"
-            else:
-                warning_message += f"{base_path / Path(*Path(directory.base_path).parts[1:])}\n"
-        warning_message += "\nThese will be stored in the database as:\n"
-        for directory in server_session.client_config.backup_directories.values():
-            warning_message += f"{directory.base_path}\n"
-
-        warning_message += (
-            "\nTo accept this warning and run the migration, run the same command again with an additional option: "
-            "--accept-warning\n\n"
-            "Always run WITHOUT --accept-warning first to check the specific warnings.\n\n"
-            "The database has NOT been modified."
-        )
-        logger.warning(warning_message)
+    if not options['accept_warning']:
+        _warn_migrate_backup(base_path, server_session, **options)
         return
 
-    if infer_timestamp:
+    if options['infer_timestamp']:
         for directory in base_path.iterdir():
             timestamp = datetime.fromisoformat(directory.name)
             if timestamp.tzinfo:
@@ -155,8 +114,8 @@ def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, 
                 base_path=directory,
                 timestamp=timestamp,
                 description=description,
-                hardlinks=hardlinks,
-                fast_unsafe=fast_unsafe,
+                hardlinks=options['hardlinks'],
+                fast_unsafe=options['fast_unsafe'],
             )
     else:
         if timestamp.tzinfo is None:
@@ -166,13 +125,62 @@ def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, 
             base_path=base_path,
             timestamp=timestamp,
             description=description,
-            hardlinks=hardlinks,
-            fast_unsafe=fast_unsafe,
+            hardlinks=options['hardlinks'],
+            fast_unsafe=options['fast_unsafe'],
         )
 
 
+def _warn_migrate_backup(base_path: Path, server_session: protocol.ServerSession, **options: bool):
+    warning_message = "WARNING! migrate-backup is DANGEROUS! Make sure you understand it first.\n\n"
+    if options['hardlinks']:
+        warning_message += (
+            "--hardlinks ... Changing the migrated files after migration WILL CORRUPT YOUR BACKUP DATABASE. "
+            "  Hardlinks are fast but hardlinks are DANGEROUS.\n"
+            "To avoid corruption you are advised either to use --no-hardlinks (creating a copy) or consider "
+            "deleting the original after migration.\n\n"
+        )
+
+    if options['infer_timestamp']:
+        try:
+            timestamps = ', '.join(sorted(datetime.fromisoformat(path.name).isoformat()
+                                          for path in base_path.iterdir()))
+
+        # pylint: disable=broad-except
+        # There's too many reasons this can fail.  We're only informing the user of warnings here, not actually
+        # doing work so just carry on.
+        except Exception as exc:
+            logger.error(f"Unable to determine list because of error: {str_exception(exc)}")
+            timestamps = f"Unable to determine list because of error: {str_exception(exc)}"
+
+        warning_message += (
+            "--infer-timestamp will use an iso formatted timestamp or date in the file path to infer multiple "
+            "backup dates.  The full list of backups migrated will be:\n"
+        )
+        warning_message += timestamps
+        warning_message += "\n\n"
+
+    warning_message += "You have configured the following directories to be migrated:\n"
+
+    for directory in server_session.client_config.backup_directories.values():
+        if options['infer_timestamp']:
+            warning_message += f"{base_path / '<timestamp>' / Path(*Path(directory.base_path).parts[1:])}\n"
+        else:
+            warning_message += f"{base_path / Path(*Path(directory.base_path).parts[1:])}\n"
+    warning_message += "\nThese will be stored in the database as:\n"
+    for directory in server_session.client_config.backup_directories.values():
+        warning_message += f"{directory.base_path}\n"
+
+    warning_message += (
+        "\nTo accept this warning and run the migration, run the same command again with an additional option: "
+        "--accept-warning\n\n"
+        "Always run WITHOUT --accept-warning first to check the specific warnings.\n\n"
+        "The database has NOT been modified."
+    )
+    logger.warning(warning_message)
+
+
 def migrate_single_backup(server_session: protocol.ServerSession, base_path: Path, timestamp: datetime,
-                          fast_unsafe: bool, description: str, hardlinks: bool):
+                          description: str, **options: bool):
     async def _backup():
         backup_session = await server_session.start_backup(
             backup_date=timestamp,
@@ -182,14 +190,14 @@ def migrate_single_backup(server_session: protocol.ServerSession, base_path: Pat
         logger.info(f"Migrating Backup - {backup_session.config.backup_date}")
         backup_directories = {name: offset_base_path(value, base_path)
                               for name, value in server_session.client_config.backup_directories.items()}
-        backup_scanner = BackupMigrationScanner(backup_session, hardlinks)
+        backup_scanner = BackupMigrationScanner(backup_session, options['hardlinks'])
         try:
-            await backup_scanner.scan_all(backup_directories, fast_unsafe=fast_unsafe)
+            await backup_scanner.scan_all(backup_directories, fast_unsafe=options['fast_unsafe'])
             logger.info("Finalizing backup")
             await backup_session.complete()
             logger.info("%s done", timestamp.isoformat())
-        except (Exception, asyncio.CancelledError) as ex:
-            logger.info("Discarding session due to error (%s)", str_exception(ex))
+        except (Exception, asyncio.CancelledError) as exc:
+            logger.info("Discarding session due to error (%s)", str_exception(exc))
             await backup_session.discard()
             raise
 
@@ -209,7 +217,7 @@ def offset_base_path(scan_spec: protocol.ClientConfiguredBackupDirectory,
 
 
 class BackupMigrationScanner(scanner.Scanner):
-    
+
     def __init__(self, backup_session: protocol.BackupSession, hardlinks: bool):
         super().__init__(backup_session)
         self.hardlinks = hardlinks
@@ -222,14 +230,16 @@ class BackupMigrationScanner(scanner.Scanner):
         if inode.type == protocol.FileType.REGULAR:
             # This is really cheating, we assume this is a local database session and use a protected field to add the
             # file as a hardlink to the original
+            # TODO add a hardlink option or method to local database.  This is likely to be useful elsewhere
+            # pylint: disable=protected-access
             target_path = self.backup_session._new_object_path_for(inode.hash)
             try:
                 source_path = path / missing_file
                 logger.info(f"Creating hardlink '{source_path}' → '{target_path}'")
                 source_path.link_to(target_path)
                 return
-            except OSError as ex:
-                logger.error(f"Failed to create hardlink ({ex}) falling back to copying")
+            except OSError as exc:
+                logger.error(f"Failed to create hardlink ({exc}) falling back to copying")
                 await super()._upload_missing_file(path, directory, missing_file)
 
 

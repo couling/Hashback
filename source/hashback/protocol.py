@@ -5,7 +5,7 @@ import stat
 from abc import abstractmethod
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple, Collection, Tuple
+from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple, Tuple
 from uuid import UUID, uuid4
 import dateutil.tz
 
@@ -64,14 +64,14 @@ class Inode(BaseModel):
         return stat.S_IMODE(self.mode)
 
     @classmethod
-    def from_stat(cls, s, hash_value: Optional[str]) -> "Inode":
+    def from_stat(cls, struct_stat, hash_value: Optional[str]) -> "Inode":
         return Inode(
-            mode=stat.S_IMODE(s.st_mode),
-            type=cls._type(s.st_mode),
-            size=s.st_size,
-            uid=s.st_uid,
-            gid=s.st_gid,
-            modified_time=datetime.fromtimestamp(s.st_mtime, timezone.utc),
+            mode=stat.S_IMODE(struct_stat.st_mode),
+            type=cls._type(struct_stat.st_mode),
+            size=struct_stat.st_size,
+            uid=struct_stat.st_uid,
+            gid=struct_stat.st_gid,
+            modified_time=datetime.fromtimestamp(struct_stat.st_mtime, timezone.utc),
             hash=hash_value,
         )
 
@@ -112,7 +112,7 @@ class Backup(BaseModel):
 
 class FileReader(Protocol):
     @abstractmethod
-    async def read(self, n: int = None) -> bytes:
+    async def read(self, num_bytes: int = None) -> bytes:
         """
         Read n bytes from the source. If N < 0 read all bytes to the EOF before returning.
         """
@@ -296,13 +296,6 @@ class BackupSession(Protocol):
         Delete this partial backup entirely.  This cannot be undone.  All uploads etc will be discarded from the server.
         """
 
-    @property
-    @abstractmethod
-    def server_session(self) -> "ServerSession":
-        """
-        The server session this is attached to
-        """
-
 
 class ServerSession(Protocol):
 
@@ -436,6 +429,7 @@ class RemoteException(BaseModel):
     name: str
     message: str
 
+    #pylint: disable=no-self-argument,no-self-use
     @validator('name')
     def _name_in_exceptions_by_name(cls, name: str) -> str:
         if name not in EXCEPTIONS_BY_NAME:

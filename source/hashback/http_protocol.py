@@ -61,8 +61,7 @@ class ServerProperties(BaseModel):
         if self.extended_params:
             query = urllib.parse.urlencode(self.extended_params)
             return f"{self.scheme}://{netloc}/?{query}"
-        else:
-            return f"{self.scheme}://{netloc}/"
+        return f"{self.scheme}://{netloc}/"
 
     @classmethod
     def parse_url(cls, url: str) -> "ServerProperties":

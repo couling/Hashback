@@ -13,7 +13,7 @@ from .scanner import Scanner
 
 logger = logging.getLogger(__name__)
 
-
+#pylint: disable=duplicate-code,no-value-for-parameter
 def main():
     register_clean_shutdown()
     setup_logging()
@@ -46,8 +46,8 @@ def backup(server_session: ServerSession, timestamp: datetime, description: Opti
                 allow_overwrite=overwrite,
                 description=description,
             )
-        except DuplicateBackup as ex:
-            raise click.ClickException(f"Duplicate backup {ex}") from None
+        except DuplicateBackup as exc:
+            raise click.ClickException(f"Duplicate backup {exc}") from None
 
         logger.info(f"Backup - {backup_session.config.backup_date}")
         backup_scanner = Scanner(backup_session)
@@ -68,13 +68,15 @@ def select_database(path: str) -> ServerSession:
     url = urlparse(path)
     if url.scheme == '' or url.scheme == 'file':
         logger.debug("Loading local database plugin")
-        import local_database
+        #pylint: disable=import-outside-toplevel
+        from . import local_database
         return local_database.LocalDatabase(Path(path)).open_client_session(client_id_or_name=url.username)
     if url.scheme == 'http' or url.scheme =='https':
         logger.debug("Loading http client plugin")
+        #pylint: disable=import-outside-toplevel
         from  . import http_client, http_protocol
         server_properties = http_protocol.ServerProperties.parse_url(path)
-        return run_then_cancel(http_client.BasicAuthClient.login(server_properties=server_properties))
+        return run_then_cancel(http_client.BasicAuthClient.login(server=server_properties))
     raise ValueError(f"Unknown scheme {url.scheme}")
 
 if __name__ == '__main__':

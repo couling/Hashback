@@ -51,7 +51,7 @@ async def get_backup_latest(session: ServerSession = Depends(cache.user_session)
 
 
 @endpoint(http_protocol.BACKUP_BY_DATE)
-async def get_backup_latest(backup_date: datetime, session: ServerSession = Depends(cache.user_session)) -> Backup:
+async def get_backup_by_date(backup_date: datetime, session: ServerSession = Depends(cache.user_session)) -> Backup:
     return await session.get_backup(backup_date=backup_date)
 
 

@@ -65,11 +65,11 @@ def environ_log_levels() -> Dict:
 
 def merge(base, update):
     base = deepcopy(base)
-    for k, v in update.items():
-        if isinstance(v, collections.abc.Mapping):
-            base[k] = merge(base.get(k, {}), v)
+    for key, value in update.items():
+        if isinstance(value, collections.abc.Mapping):
+            base[key] = merge(base.get(key, {}), value)
         else:
-            base[k] = v
+            base[key] = value
     return base
 
 
@@ -77,6 +77,7 @@ def clean_shutdown(num, _):
     """
     Intended to be used as a signal handler
     """
+    # pylint: disable=no-member
     logger.error(f"Caught signal '{signal.Signals(num).name}' - Shutting down")
     raise KeyboardInterrupt(f"Signal '{signal.Signals(num).name}'")
 
@@ -101,6 +102,7 @@ def run_then_cancel(future: Optional[Union[asyncio.Future, Coroutine]] = None,
         loop.run_until_complete(asyncio.gather(*all_tasks, return_exceptions=True))
 
 
+# pylint: disable=no-value-for-parameter
 def register_clean_shutdown(numbers: Collection[Union[int, signal.Signals]] = (signal.SIGINT, signal.SIGTERM)):
     for num in numbers:
         signal.signal(num, clean_shutdown)

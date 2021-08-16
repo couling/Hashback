@@ -91,7 +91,7 @@ class Scanner:
         if filters is not None and filters.filter_type == protocol.FilterType.EXCLUDE:
             if filters.exceptions:
                 # TODO implement inclusions
-                raise NotImplementedError(f"unable to process exceptions to exclusions (IE inclusions)")
+                raise NotImplementedError("unable to process exceptions to exclusions (IE inclusions)")
             raise SkipThis(f"Skipping excluded path {path}")
 
         last_scan_hash = last_scan.hash if last_scan is not None else None
@@ -208,8 +208,9 @@ class Scanner:
             if not server_response.success:
                 raise protocol.ProtocolError(
                     "Files disappeared server-side while backup is in progress.  "
-                    "This must not happen or the backup will be corrupted. %s",
-                    {name: directory.children.get(name) for name in server_response.missing_files}
+                    "This must not happen or the backup will be corrupted. "
+                    f"{ {name: directory.children.get(name) for name in server_response.missing_files} }",
+
                 )
             ref_hash = directory.hash().ref_hash
 
@@ -231,8 +232,8 @@ class Scanner:
         except FileNotFoundError:
             logger.error(f"File disappeared before it could be uploaded: {path / missing_file}")
             del directory.children[missing_file]
-        except OSError as ex:
-            logger.error(f"Cannot upload: {path / missing_file} - {str_exception(ex)}")
+        except OSError as exc:
+            logger.error(f"Cannot upload: {path / missing_file} - {str_exception(exc)}")
 
 
 def _normalize_filters(filters: List[protocol.Filter]) -> _NormalizedFilter:

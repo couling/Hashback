@@ -1,3 +1,5 @@
+# pylint: disable=redefined-outer-name
+
 import asyncio
 from datetime import datetime, timezone
 from io import BytesIO
@@ -75,7 +77,7 @@ def test_client_provides_client_config(server_session: LocalDatabaseServerSessio
     assert server_session.client_config is not client_config
 
 
-def test_backup_can_be_retrieved(previous_backup: Backup, server_session: LocalDatabaseServerSession, client_config):
+def test_backup_can_be_retrieved(previous_backup: Backup, server_session: LocalDatabaseServerSession):
     async def check():
         all_backups = await server_session.list_backups()
         assert len(all_backups) == 1
