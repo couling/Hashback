@@ -20,10 +20,12 @@ class Endpoint(NamedTuple):
 
         result = self.url_stub
         if kwargs:
-            kwargs = {key: urllib.parse.quote_plus(str(value)) for key, value in kwargs.items() if value is not None}
-            result = self.url_stub.format(**kwargs)
+            path_args = {key: urllib.parse.quote_plus(str(value))
+                         for key, value in kwargs.items()
+                         if key not in self.query_params}
+            result = self.url_stub.format(**path_args)
             if self.query_params:
-                query = {key: value for key, value in kwargs.items() if key in self.query_params}
+                query = {key: value for key, value in kwargs.items() if key in self.query_params and value is not None}
                 if query:
                     result = result + "?" + urllib.parse.urlencode(query)
         return base_url + result

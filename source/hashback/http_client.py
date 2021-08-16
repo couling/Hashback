@@ -19,19 +19,30 @@ class Client(Protocol):
 
     @abc.abstractmethod
     async def request(self, endpoint: http_protocol.Endpoint, body = None, **params: Any):
-        pass
+        """
+        Send request to server for a specific response.
+        :param endpoint: A specification of of the URL, parameters and return type
+        :param body: Optional object to send in the body. Can be anything requests can handle
+        :param params: Keyword arguments which will be formed into the URL and query
+        """
 
     @abc.abstractmethod
     def close(self):
-        pass
+        """
+        Cleanup all resources for this client (eg: open connections and worker threads)
+        """
 
-    @abc.abstractmethod
     def __enter__(self):
-        pass
+        """
+        Context manager does nothing special on open
+        """
+        return self
 
-    @abc.abstractmethod
     def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
+        """
+        Must close self
+        """
+        self.close()
 
 
 class ClientSession(protocol.ServerSession):
@@ -61,12 +72,12 @@ class ClientSession(protocol.ServerSession):
     async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False,
                            description: Optional[str] = None) -> BackupSession:
         params = {
-            'backup_date': backup_date,
+            'backup_date': backup_date.isoformat(),
             'allow_overwrite': allow_overwrite,
         }
         if description is not None:
             params['description'] = description
-        return ClientBackupSession(self, await self._client.request(http_protocol.START_BACKUP, params=params))
+        return ClientBackupSession(self, await self._client.request(http_protocol.START_BACKUP, **params))
 
     async def resume_backup(self, *, session_id: Optional[UUID] = None,
                             backup_date: Optional[datetime] = None) -> BackupSession:
@@ -226,7 +237,6 @@ class BasicAuthClient(Client):
                 # If this was a valid remote exception we can just raise it.
                 raise remote_exception.exception() from None
 
-
             try:
                 message = "\n" + content.decode()
             except UnicodeDecodeError:
@@ -268,11 +278,6 @@ class BasicAuthClient(Client):
         self._executor.shutdown(wait=False)
         self._http_session.close()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
 
 class RequestResponse(protocol.FileReader):
     def __init__(self, response: requests.Response, executor: Executor):
