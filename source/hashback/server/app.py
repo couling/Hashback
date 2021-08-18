@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Union, BinaryIO
+from typing import Optional, Union
 from uuid import UUID
 
 import fastapi.responses
@@ -28,7 +28,7 @@ def endpoint(spec: http_protocol.Endpoint, **kwargs):
     Attach the method to the app at the given endpoint
     Annotation which evaluates to get, post, put, delete with a URL stub and response model.
     """
-    if spec.result_type is None or spec.result_type == BinaryIO:
+    if spec.result_type is None or spec.result_type == protocol.FileReader:
         annotation = METHOD_MAP[spec.method](path=spec.url_stub, **kwargs)
     else:
         annotation = METHOD_MAP[spec.method](path=spec.url_stub, response_model=spec.result_type)
@@ -60,7 +60,7 @@ async def get_directory(ref_hash: str, session: ServerSession = Depends(cache.us
                         ) -> http_protocol.GetDirectoryResponse:
     inode = protocol.Inode(mode=0, size=0, uid=0, gid=0, hash=ref_hash, type=protocol.FileType.DIRECTORY,
                            modified_time=datetime(year=1970, month=1, day=1))
-    result =  await session.get_directory(inode)
+    result =  await session.get_directory(inode=inode)
     return http_protocol.GetDirectoryResponse(children=result.children)
 
 
@@ -79,7 +79,7 @@ async def get_file(ref_hash: str, session: ServerSession = Depends(cache.user_se
     content = await session.get_file(inode)
 
     try:
-        if content.file_size > 0:
+        if content.file_size is not None:
             headers = {'Content-Length': str(content.file_size)}
         else:
             headers = {}

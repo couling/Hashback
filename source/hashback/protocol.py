@@ -7,10 +7,9 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple, Tuple
 from uuid import UUID, uuid4
-import dateutil.tz
-
 
 import aiofiles.os
+import dateutil.tz
 from pydantic import BaseModel, Field, validator
 
 # This will either get bumped, or the file will be duplicated and each one will have a VERSION.  In any case this file
@@ -58,10 +57,6 @@ class Inode(BaseModel):
             if check(mode):
                 return file_type
         raise ValueError(f"No type found for mode {mode}")
-
-    @property
-    def permissions(self) -> int:
-        return stat.S_IMODE(self.mode)
 
     @classmethod
     def from_stat(cls, struct_stat, hash_value: Optional[str]) -> "Inode":
@@ -129,6 +124,18 @@ class FileReader(Protocol):
         """
         Get the size of this file. May be Null if the item is a pipe or socket.
         """
+
+    def __enter__(self):
+        """
+        Do nothing on enter
+        """
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Close the file on exit
+        """
+        self.close()
 
 
 class DirectoryDefResponse(BaseModel):
@@ -405,7 +412,7 @@ class ProtocolError(Exception):
     http_status: int = 400  # Bad request
 
 
-class InvalidArgumentsError(ProtocolError):
+class InvalidArgumentsError(ProtocolError, ValueError):
     http_status: int = 422  # Unprocessable entity
 
 
@@ -482,13 +489,14 @@ def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
 
 async def restore_file(file_path: Path, inode: Inode, content: FileReader, restore_owner: bool, restore_permissions):
     # TODO verify hash as we go
-    if inode.type == FileType.REGULAR:
+    if inode.type is FileType.REGULAR:
         async with aiofiles.open(file_path, 'xb') as target:
-            content = await content.read(READ_SIZE)
-            while content:
-                await target.write(content)
-                content = await content.read(READ_SIZE)
-    elif inode.type == FileType.LINK:
+            bytes_read = await content.read(READ_SIZE)
+            while bytes_read:
+                await target.write(bytes_read)
+                bytes_read = await content.read(READ_SIZE)
+
+    elif inode.type is FileType.LINK:
         link_target = (await content.read()).decode()
         file_path.symlink_to(link_target)
     else:  # inode.type == protocol.FileType.PIPE:
@@ -497,8 +505,9 @@ async def restore_file(file_path: Path, inode: Inode, content: FileReader, resto
         os.mkfifo(file_path)
 
     if restore_owner:
-        os.chown(file_path, inode.uid, inode.gid)
+        os.chown(file_path, inode.uid, inode.gid, follow_symlinks=False)
     if restore_permissions:
-        os.chmod(file_path, inode.mode)
+        os.chmod(file_path, inode.mode, follow_symlinks=False)
     timestamp = inode.modified_time.timestamp()
-    os.utime(file_path, (timestamp, timestamp))
+    os.utime(file_path, (timestamp, timestamp), follow_symlinks=False)
+

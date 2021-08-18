@@ -194,6 +194,8 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         result_size = result_path.stat().st_size
         result = await aiofiles.open(self._database.store_path_for(inode.hash),"rb")
         result.file_size = result_size
+        result.__enter__ = lambda s: result
+        result.__exit__ = lambda *_, **__: result.close()
         return result
 
     def complete_backup(self, meta: protocol.Backup, overwrite: bool):

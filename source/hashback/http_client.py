@@ -71,17 +71,20 @@ class ClientSession(protocol.ServerSession):
 
     async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False,
                            description: Optional[str] = None) -> BackupSession:
-        params = {
-            'backup_date': backup_date.isoformat(),
-            'allow_overwrite': allow_overwrite,
-        }
-        if description is not None:
-            params['description'] = description
-        return ClientBackupSession(self, await self._client.request(http_protocol.START_BACKUP, **params))
+        return ClientBackupSession(self, await self._client.request(
+            endpoint=http_protocol.START_BACKUP,
+            backup_date=backup_date,
+            allow_overwrite=allow_overwrite,
+            description=description
+        ))
 
     async def resume_backup(self, *, session_id: Optional[UUID] = None,
                             backup_date: Optional[datetime] = None) -> BackupSession:
-        return await self._client.request(http_protocol.RESUME_BACKUP, session_id=session_id, backup_date=backup_date)
+        return ClientBackupSession(self, await self._client.request(
+            endpoint=http_protocol.RESUME_BACKUP,
+            session_id=session_id,
+            backup_date=backup_date
+        ))
 
 
     async def get_backup(self, backup_date: Optional[datetime] = None) -> Optional[Backup]:
@@ -91,25 +94,31 @@ class ClientSession(protocol.ServerSession):
 
     async def get_directory(self, inode: Inode) -> Directory:
         if inode.type != protocol.FileType.DIRECTORY:
-            raise ValueError("Inode is not a directory")
+            raise protocol.InvalidArgumentsError("Inode is not a directory")
         result = await self._client.request(http_protocol.GET_DIRECTORY, ref_hash=inode.hash)
         return Directory(__root__=result.children)
 
     async def get_file(self, inode: Inode, target_path: Optional[Path] = None, restore_permissions: bool = False,
                        restore_owner: bool = False) -> Optional[protocol.FileReader]:
-        result = await self._client.request(http_protocol.GET_FILE, restore_permissions=restore_permissions,
-                                            restore_owner=restore_owner)
-        with result:
-            content_length = result.headers.get('Content-Length', None)
-            if content_length is not None:
-                content_length = int(content_length)
-            content = result.content
-            content.file_size = content_length
-            content.close = lambda: None
-        if target_path is None:
-            return content
-        await protocol.restore_file(target_path, inode, content, restore_owner, restore_permissions)
-        return None
+        if inode.type is protocol.FileType.DIRECTORY:
+            raise protocol.InvalidArgumentsError(f'Cannot get file of type {inode.type}')
+        result = await self._client.request(
+            http_protocol.GET_FILE, ref_hash=inode.hash,
+            restore_permissions=restore_permissions,
+            restore_owner=restore_owner,
+        )
+        if target_path:
+            with result:
+                await protocol.restore_file(
+                    file_path=target_path,
+                    inode=inode,
+                    content=result,
+                    restore_owner=restore_owner,
+                    restore_permissions=restore_permissions,
+                )
+            return None
+        return result
+
 
 
 class ClientBackupSession(protocol.BackupSession):
@@ -219,7 +228,7 @@ class BasicAuthClient(Client):
         if hasattr(body, 'json'):
             return self._send_raw_request(endpoint.method, url, stream_response, data=body.json().encode(),
                                           headers={'Content-Type': 'application/json'})
-        raise ValueError(f"Cannot send body type {type(body).__name__}")
+        raise protocol.InvalidArgumentsError(f"Cannot send body type {type(body).__name__}")
 
     def _send_raw_request(self, method: str, url: str, stream_response: bool, **kwargs) -> requests.Response:
         response = self._http_session.request(method, url, stream=stream_response, auth=self._auth, **kwargs)
@@ -248,31 +257,33 @@ class BasicAuthClient(Client):
         return response
 
     def _parse_response(self, endpoint: http_protocol.Endpoint, server_response: requests.Response):
-        result = None
+        if endpoint.result_type is protocol.FileReader:
+            try:
+                return RequestResponse(server_response, self._executor)
+            except:
+                # Closing the RequestResponse will close the server_response. But if we fail to creat one, we must
+                # close ourselves.
+                server_response.close()
+                raise
         try:
             if endpoint.result_type is None:
-                pass  # result = None
-            elif isinstance(endpoint.result_type, BinaryIO):
-                result = RequestResponse(server_response, self._executor)
-            elif hasattr(endpoint.result_type, 'parse_raw'):
-                result = endpoint.result_type.parse_raw(server_response.content)
-            else:
-                raise ValueError(f'Cannot parse result type {endpoint.result_type.__name__}')
+                return None
+            if hasattr(endpoint.result_type, 'parse_raw'):
+                return endpoint.result_type.parse_raw(server_response.content)
+            raise ValueError(f'Cannot parse result type {endpoint.result_type.__name__}')
 
         finally:
-            if not isinstance(result, RequestResponse):
-                # If we need to close the result, it might not be a good idea to close without reading the content
-                # This results in closing the connection which may slow down future requests.  If the Content-Length
-                # header shows less than 10KB, we read the content and leave the connection open by consuming the body.
-                # This has not been performance tuned: 10KB is a guess.
-                try:
-                    if int(server_response.headers['Content-Length']) <= 10240:
-                        _ = server_response.content
-                except IOError:
-                    # Honestly we really don't care if / why the above failed.
-                    pass
-                server_response.close()
-        return result
+            # If we need to close the result, it might not be a good idea to close without reading the content
+            # This results in closing the connection which may slow down future requests.  If the Content-Length
+            # header shows less than 10KB, we read the content and leave the connection open by consuming the body.
+            # This has not been performance tuned: 10KB is a guess.
+            try:
+                if int(server_response.headers['Content-Length']) <= 10240:
+                    _ = server_response.content
+            except IOError:
+                # Honestly we really don't care if / why the above failed.
+                pass
+            server_response.close()
 
     def close(self):
         self._executor.shutdown(wait=False)
@@ -287,7 +298,7 @@ class RequestResponse(protocol.FileReader):
         self._cached_content = BytesIO()
         self._executor = executor
 
-    async def read(self, num_bytes: int = None) -> bytes:
+    async def read(self, num_bytes: int = -1) -> bytes:
         if num_bytes < 0:
             return await asyncio.get_running_loop().run_in_executor(self._executor, self._read_all)
         return await asyncio.get_running_loop().run_in_executor(self._executor, self._read_partial, num_bytes)

@@ -1,5 +1,6 @@
 import urllib.parse
-from typing import Optional, Dict, List, NamedTuple, Type, BinaryIO, Any
+from datetime import datetime
+from typing import Optional, Dict, List, NamedTuple, Type, Any
 
 from pydantic import BaseModel
 
@@ -11,8 +12,12 @@ DEFAULT_PORT = 4649
 class Endpoint(NamedTuple):
     method: str
     url_stub: str
-    query_params: Optional[set]
+    query_params: set
     result_type: Optional[Type]
+
+    _CONVERSIONS = {
+        datetime: datetime.isoformat
+    }
 
     def format_url(self, base_url: str, kwargs: Dict[str, Any]) -> str:
         if base_url[-1] == '/':
@@ -20,14 +25,20 @@ class Endpoint(NamedTuple):
 
         result = self.url_stub
         if kwargs:
-            path_args = {key: urllib.parse.quote_plus(str(value))
-                         for key, value in kwargs.items()
-                         if key not in self.query_params}
-            result = self.url_stub.format(**path_args)
+            kwargs = {key: self._CONVERSIONS.get(type(value), str)(value) for key, value in kwargs.items()
+                      if value is not None}
             if self.query_params:
-                query = {key: value for key, value in kwargs.items() if key in self.query_params and value is not None}
+                path_args = {key: urllib.parse.quote_plus(value)
+                             for key, value in kwargs.items()
+                             if key not in self.query_params}
+                result = self.url_stub.format(**path_args)
+                query = {key: value for key, value in kwargs.items() if key in self.query_params}
                 if query:
                     result = result + "?" + urllib.parse.urlencode(query)
+            else:
+                path_args = {key: urllib.parse.quote_plus(str(value))
+                             for key, value in kwargs.items()}
+                result = self.url_stub.format(**path_args)
         return base_url + result
 
 
@@ -113,7 +124,7 @@ USER_CLIENT_CONFIG = Endpoint('GET', '/about-me', None, protocol.ClientConfigura
 BACKUP_LATEST = Endpoint('GET', '/backups/latest', None, protocol.Backup)
 BACKUP_BY_DATE = Endpoint('GET', '/backups/{backup_date}', None, protocol.Backup)
 GET_DIRECTORY = Endpoint('GET', '/directory/{ref_hash}', None, GetDirectoryResponse)
-GET_FILE = Endpoint('GET', "/file/{ref_hash}", None, BinaryIO)
+GET_FILE = Endpoint('GET', "/file/{ref_hash}", None, protocol.FileReader)
 
 # Backup Session
 START_BACKUP = Endpoint('POST', '/backup-session/new', {'backup_date', 'allow_overwrite', 'description'},
