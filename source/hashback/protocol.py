@@ -510,4 +510,3 @@ async def restore_file(file_path: Path, inode: Inode, content: FileReader, resto
         os.chmod(file_path, inode.mode, follow_symlinks=False)
     timestamp = inode.modified_time.timestamp()
     os.utime(file_path, (timestamp, timestamp), follow_symlinks=False)
-

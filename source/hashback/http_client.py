@@ -280,8 +280,12 @@ class BasicAuthClient(Client):
             try:
                 if int(server_response.headers['Content-Length']) <= 10240:
                     _ = server_response.content
-            except IOError:
-                # Honestly we really don't care if / why the above failed.
+
+            # pylint: disable=broad-except
+            # Honestly we really don't care if / why the above failed.  except Exception will not cat keyboard
+            # interrupt etc.  But pretty much any socket error, or the Content-Length missing from the response
+            # Can and should be handled by simply closing the response as we'd intended to do anyway.
+            except Exception:
                 pass
             server_response.close()
 

@@ -15,7 +15,7 @@ import pytest
 from hashback import protocol
 from hashback.http_client import ClientSession
 from hashback.protocol import ClientConfiguration, BackupSession
-from tests.test_client_server.constants import EXAMPLE_DIR
+from .constants import EXAMPLE_DIR, EXAMPLE_DIR_INODE
 
 
 def test_login(client: ClientSession, client_config: ClientConfiguration, mock_local_db):
@@ -23,177 +23,222 @@ def test_login(client: ClientSession, client_config: ClientConfiguration, mock_l
     assert {'client_id_or_name': 'test_user'} in (call.kwargs for call in mock_local_db.open_client_session.mock_calls)
 
 
-@pytest.mark.parametrize('allow_overwrite', (False, True))
-def test_start_backup(client: ClientSession, allow_overwrite: bool, mock_session):
-    backup_date = datetime.now(timezone.utc)
-    description = 'a new test backup'
-    backup_session: BackupSession = asyncio.get_event_loop().run_until_complete(client.start_backup(
-        backup_date=backup_date,
-        allow_overwrite=allow_overwrite,
-        description='a new test backup',
-    ))
-    assert backup_session.server_session is client
-    assert backup_session.is_open
-    assert backup_session.config.client_id == client.client_config.client_id
-    assert {'backup_date':backup_date, 'allow_overwrite': allow_overwrite, 'description': description} in (
-        call.kwargs for call in mock_session.start_backup.mock_calls)
+class BaseTestPassThrough:
+
+    mock_backend_session: MagicMock
+
+    def _run_and_check_pass_through(self, method, return_value=None, check_return_value=True, side_effect=None):
+        method_name = method.cr_frame.f_code.co_name
+        kwargs = {key: value for key, value in method.cr_frame.f_locals.items() if key != 'self'}
+        # Setup the mocked server backend to have this method read to respond as requested
+        if side_effect is not None:
+            setattr(self.mock_backend_session, method_name, AsyncMock(side_effect=side_effect))
+        else:
+            setattr(self.mock_backend_session, method_name, AsyncMock(return_value=return_value))
+
+        # Run the coroutine
+        result = asyncio.get_event_loop().run_until_complete(method)
+
+        # Check the return value was passed through correctly
+        if check_return_value:
+            if return_value is not None:
+                assert return_value == result
+                assert return_value is not result
+            else:
+                assert result is None
+
+        # Check the call made it through the client and server side to server backend (mock)
+        assert kwargs in (call.kwargs for call in getattr(self.mock_backend_session, method.__name__).mock_calls), \
+            "Call kwargs not passed through correctly"
+
+        return result
 
 
-def test_start_backup_duplicate(client: ClientSession, mock_session):
-    mock_session.start_backup = AsyncMock(side_effect=protocol.DuplicateBackup)
-    backup_date = datetime.now(timezone.utc)
-    with pytest.raises(protocol.DuplicateBackup):
-        asyncio.get_event_loop().run_until_complete(client.start_backup(
+class TestPassThroughServerSession(BaseTestPassThrough):
+
+    client_session: ClientSession
+
+    @pytest.fixture(autouse=True)
+    def _client_backup_session(self, client, mock_session):
+        self.client_session = client
+        self.mock_backend_session = mock_session
+
+    @pytest.mark.parametrize('allow_overwrite', (False, True))
+    def test_start_backup(self, allow_overwrite: bool):
+        backup_date = datetime.now(timezone.utc)
+        description = 'a new test backup'
+        backup_session: BackupSession = asyncio.get_event_loop().run_until_complete(self.client_session.start_backup(
             backup_date=backup_date,
-            allow_overwrite=False,
+            allow_overwrite=allow_overwrite,
             description='a new test backup',
         ))
+        assert backup_session.server_session is self.client_session
+        assert backup_session.is_open
+        assert backup_session.config.client_id == self.client_session.client_config.client_id
+        assert {'backup_date': backup_date, 'allow_overwrite': allow_overwrite, 'description': description} in (
+            call.kwargs for call in self.mock_backend_session.start_backup.mock_calls)
 
+    def test_start_backup_duplicate(self):
+        self.mock_backend_session.start_backup = AsyncMock(side_effect=protocol.DuplicateBackup)
+        backup_date = datetime.now(timezone.utc)
+        with pytest.raises(protocol.DuplicateBackup):
+            asyncio.get_event_loop().run_until_complete(self.client_session.start_backup(
+                backup_date=backup_date,
+                allow_overwrite=False,
+                description='a new test backup',
+            ))
 
-@pytest.mark.parametrize('params', ({'backup_date': datetime.now(timezone.utc)}, {'session_id':  uuid4()}), ids=str)
-def test_resume_backup(client: ClientSession, params, mock_session):
-    backup_session: BackupSession = asyncio.get_event_loop().run_until_complete(client.resume_backup(**params))
-    params.setdefault('backup_date', None)
-    params.setdefault('session_id', None)
-    assert backup_session.server_session is client
-    assert backup_session.is_open
-    assert params in (call.kwargs for call in mock_session.resume_backup.mock_calls)
+    @pytest.mark.parametrize('params', ({'backup_date': datetime.now(timezone.utc)}, {'session_id': uuid4()}), ids=str)
+    def test_resume_backup(self, params):
+        backup_session = asyncio.get_event_loop().run_until_complete(self.client_session.resume_backup(**params))
+        params.setdefault('backup_date', None)
+        params.setdefault('session_id', None)
+        assert backup_session.server_session is self.client_session
+        assert backup_session.is_open
+        assert params in (call.kwargs for call in self.mock_backend_session.resume_backup.mock_calls)
 
+    @pytest.mark.parametrize('params', ({'backup_date': datetime.now(timezone.utc)}, {'session_id':  uuid4()}), ids=str)
+    def test_resume_backup_not_exists(self, params):
+        with pytest.raises(protocol.NotFoundException):
+            self._run_and_check_pass_through(self.client_session.resume_backup(**params),
+                                             side_effect=protocol.NotFoundException)
 
-@pytest.mark.parametrize('params', ({'backup_date': datetime.now(timezone.utc)}, {'session_id':  uuid4()}), ids=str)
-def test_resume_backup_not_exists(client: ClientSession, params, mock_session):
-    mock_session.resume_backup = AsyncMock(side_effect=protocol.NotFoundException)
-    with pytest.raises(protocol.NotFoundException):
-        asyncio.get_event_loop().run_until_complete(client.resume_backup(**params))
-
-
-@pytest.mark.parametrize('backup_date', (datetime.now(timezone.utc), None))
-def test_get_backup(client: ClientSession, mock_session, backup_date, client_config: ClientConfiguration):
-    example_backup = protocol.Backup(
-        client_id=client_config.client_id,
-        client_name=client_config.client_name,
-        backup_date=datetime.now(timezone.utc),
-        started=datetime.now(timezone.utc) - timedelta(minutes=20),
-        completed=datetime.now(timezone.utc) - timedelta(minutes=10),
-        roots={},
-        description='example backup',
-    )
-    mock_session.get_backup = AsyncMock(return_value=example_backup)
-    backup: protocol.Backup = asyncio.get_event_loop().run_until_complete(client.get_backup(backup_date))
-    if backup_date:
-        assert {'backup_date': backup_date} in (call.kwargs for call in mock_session.get_backup.mock_calls)
-    else:
-        assert (
-            ({'backup_date': None} in (call.kwargs for call in mock_session.get_backup.mock_calls))
-            or ({} in (call.kwargs for call in mock_session.get_backup.mock_calls))
+    @pytest.mark.parametrize('backup_date', (datetime.now(timezone.utc), None))
+    def test_get_backup(self, backup_date, client_config: ClientConfiguration):
+        self._run_and_check_pass_through(
+            self.client_session.get_backup(backup_date),
+            return_value=protocol.Backup(
+                client_id=client_config.client_id,
+                client_name=client_config.client_name,
+                backup_date=datetime.now(timezone.utc),
+                started=datetime.now(timezone.utc) - timedelta(minutes=20),
+                completed=datetime.now(timezone.utc) - timedelta(minutes=10),
+                roots={},
+                description='example backup',
+            )
         )
 
-    assert backup == example_backup
-    assert backup is not example_backup
+    def test_get_backup_not_found(self):
+        with pytest.raises(protocol.NotFoundException):
+            self._run_and_check_pass_through(self.client_session.get_backup(datetime.now(timezone.utc)),
+                                             side_effect=protocol.NotFoundException)
+
+    def test_get_dir(self):
+        # get_dir does not pass through the inode.  It only passes through the ref_hash from the inode
+        self.mock_backend_session.get_directory = AsyncMock(return_value=EXAMPLE_DIR)
+        directory = asyncio.get_event_loop().run_until_complete(
+            self.client_session.get_directory(EXAMPLE_DIR_INODE))
+        for call in self.mock_backend_session.get_directory.mock_calls:
+            assert call.kwargs['inode'].hash == EXAMPLE_DIR_INODE.hash
+            break
+        else:
+            assert False, "No mock calls"
+        assert directory == EXAMPLE_DIR
+        assert directory is not EXAMPLE_DIR
+
+    @pytest.mark.parametrize('streaming', (True, False))
+    def test_get_file(self, streaming):
+        async def read_file():
+            with await self.client_session.get_file(file_inode) as file:
+                assert file.file_size == (None if streaming else len(content))
+                assert await file.read() == content
+
+        content = b"this is a test"
+        content_reader = iter((content[:4], content[4:], bytes()))
+        mock_file = MagicMock()
+        mock_file.read = AsyncMock(side_effect=lambda _: next(content_reader))
+        mock_file.file_size = None if streaming else len(content)
+
+        file_inode = protocol.Inode(
+            modified_time=datetime.now(timezone.utc) - timedelta(days=365),
+            type = protocol.FileType.REGULAR,
+            mode=0o755,
+            size=599,
+            uid=1000,
+            gid=1001,
+            hash=protocol.hash_content(content),
+        )
+
+        self.mock_backend_session.get_file = AsyncMock(return_value=mock_file)
+        asyncio.get_event_loop().run_until_complete(read_file())
+        assert len(mock_file.close.mock_calls) == 0
+
+    @pytest.mark.parametrize('file_type', (protocol.FileType.REGULAR, protocol.FileType.LINK))
+    @pytest.mark.parametrize('streaming', (True, False))
+    def test_get_file_restore(self, streaming, tmp_path: Path, file_type):
+        target_path = tmp_path / 'test_file.txt'
+        content = b"this is a test"
+        content_reader = iter((content[:4], content[4:], bytes()))
+        mock_file = MagicMock()
+        mock_file.read = AsyncMock(side_effect=lambda _: next(content_reader))
+        mock_file.file_size = None if streaming else len(content)
+
+        modified_time = datetime.now(timezone.utc) - timedelta(days=365)
+        modified_time = modified_time.replace(microsecond=0)
+
+        file_inode = protocol.Inode(
+            modified_time=modified_time,
+            type=file_type,
+            mode=0o755,
+            size=599,
+            uid=1000,
+            gid=1001,
+            hash=protocol.hash_content(content),
+        )
+        target_path.parent.mkdir(exist_ok=True, parents=True)
+        self.mock_backend_session.get_file = AsyncMock(return_value=mock_file)
+        asyncio.get_event_loop().run_until_complete(self.client_session.get_file(
+            inode=file_inode,
+            target_path=target_path,
+            restore_permissions=False,
+            restore_owner=False,
+        ))
+        if file_type is protocol.FileType.REGULAR:
+            with target_path.open('rb') as file:
+                restored_content = file.read()
+            assert restored_content == content
+            assert target_path.stat().st_mtime == modified_time.timestamp()
+        else:
+            restored_content = os.readlink(target_path).encode()
+            assert restored_content == content
 
 
-def test_get_backup_not_found(client: ClientSession, mock_session):
-    mock_session.get_backup = AsyncMock(side_effect=protocol.NotFoundException)
-    with pytest.raises(protocol.NotFoundException):
-        asyncio.get_event_loop().run_until_complete(client.get_backup(datetime.now(timezone.utc)))
+class TestPassThroughBackupSession(BaseTestPassThrough):
 
+    client_session: BackupSession
 
-def test_get_dir(client: ClientSession, mock_session):
-    directory_inode = protocol.Inode(
-        modified_time=datetime.now(timezone.utc) - timedelta(days=365),
-        type = protocol.FileType.DIRECTORY,
-        mode=0o755,
-        size=599,
-        uid=1000,
-        gid=1001,
-        hash="bbbb",
-    )
-    mock_session.get_directory = AsyncMock(return_value=EXAMPLE_DIR)
-    directory: protocol.Directory = asyncio.get_event_loop().run_until_complete(client.get_directory(directory_inode))
-    for call in mock_session.get_directory.mock_calls:
-        assert call.kwargs['inode'].hash == directory_inode.hash
-        break
-    else:
-        assert False, "No mock calls"
-    assert directory == EXAMPLE_DIR
-    assert directory is not EXAMPLE_DIR
+    @pytest.fixture(autouse=True)
+    def _client_backup_session(self, client_backup_session, mock_backup_session):
+        self.client_session = client_backup_session
+        self.mock_backend_session = mock_backup_session
 
-
-@pytest.mark.parametrize('streaming', (True, False))
-def test_get_file(client: ClientSession, mock_session, streaming):
-    async def read_file():
-        with await client.get_file(file_inode) as file:
-            assert file.file_size == (None if streaming else len(content))
-            assert await file.read() == content
-
-    content = b"this is a test"
-    content_reader = iter((content[:4], content[4:], bytes()))
-    mock_file = MagicMock()
-    mock_file.read = AsyncMock(side_effect=lambda _: next(content_reader))
-    mock_file.file_size = None if streaming else len(content)
-
-    file_inode = protocol.Inode(
-        modified_time=datetime.now(timezone.utc) - timedelta(days=365),
-        type = protocol.FileType.REGULAR,
-        mode=0o755,
-        size=599,
-        uid=1000,
-        gid=1001,
-        hash=protocol.hash_content(content),
-    )
-
-    mock_session.get_file = AsyncMock(return_value=mock_file)
-    asyncio.get_event_loop().run_until_complete(read_file())
-    assert len(mock_file.close.mock_calls) == 0
-
-
-@pytest.mark.parametrize('file_type', (protocol.FileType.REGULAR, protocol.FileType.LINK))
-@pytest.mark.parametrize('streaming', (True, False))
-def test_get_file_restore(client: ClientSession, mock_session, streaming, tmp_path: Path, file_type):
-    target_path = tmp_path / 'test_file.txt'
-    content = b"this is a test"
-    content_reader = iter((content[:4], content[4:], bytes()))
-    mock_file = MagicMock()
-    mock_file.read = AsyncMock(side_effect=lambda _: next(content_reader))
-    mock_file.file_size = None if streaming else len(content)
-
-    modified_time = datetime.now(timezone.utc) - timedelta(days=365)
-    modified_time = modified_time.replace(microsecond=0)
-
-    file_inode = protocol.Inode(
-        modified_time=modified_time,
-        type=file_type,
-        mode=0o755,
-        size=599,
-        uid=1000,
-        gid=1001,
-        hash=protocol.hash_content(content),
-    )
-    target_path.parent.mkdir(exist_ok=True, parents=True)
-    mock_session.get_file = AsyncMock(return_value=mock_file)
-    asyncio.get_event_loop().run_until_complete(client.get_file(
-        inode=file_inode,
-        target_path=target_path,
-        restore_permissions=False,
-        restore_owner=False,
+    @pytest.mark.parametrize('expected_result', (
+            protocol.DirectoryDefResponse(missing_ref=uuid4(), missing_files=["aaaa"]),
+            protocol.DirectoryDefResponse(ref_hash='bbbb'),
+            protocol.DirectoryDefResponse(missing_files=['aaaa']),
     ))
-    if file_type is protocol.FileType.REGULAR:
-        with target_path.open('rb') as file:
-            restored_content = file.read()
-        assert restored_content == content
-        assert target_path.stat().st_mtime == modified_time.timestamp()
-    else:
-        restored_content = os.readlink(target_path).encode()
-        assert restored_content == content
+    @pytest.mark.parametrize('replaces', (None, uuid4()))
+    def test_directory_def(self, replaces, expected_result):
+        self.mock_backend_session.directory_def = AsyncMock(return_value=expected_result)
+        self._run_and_check_pass_through(self.client_session.directory_def(EXAMPLE_DIR, replaces),
+                                         return_value=expected_result)
+
+    def test_check_file_upload_size(self):
+        self._run_and_check_pass_through(self.client_session.check_file_upload_size(resume_id=uuid4()),
+                                         return_value=10678)
 
 
-@pytest.mark.parametrize('expected_result', (protocol.DirectoryDefResponse(missing_ref=uuid4(), missing_files=["aaaa"]),
-                                             protocol.DirectoryDefResponse(ref_hash='bbbb'),
-                                             protocol.DirectoryDefResponse(missing_files=['aaaa']),))
-@pytest.mark.parametrize('replaces', (None, uuid4()))
-def test_directory_def(client_backup_session: BackupSession, mock_backup_session, replaces, expected_result):
-    mock_backup_session.directory_def = AsyncMock(return_value=expected_result)
-    result = asyncio.get_event_loop().run_until_complete(client_backup_session.directory_def(EXAMPLE_DIR, replaces))
+    def test_complete(self):
+        result = protocol.Backup(
+            client_id=self.client_session.config.client_id,
+            client_name=self.client_session.server_session.client_config.client_name,
+            backup_date=datetime.now(timezone.utc),
+            started=datetime.now(timezone.utc) - timedelta(hours=1),
+            completed=datetime.now(timezone.utc),
+            roots=EXAMPLE_DIR.children,
+            description='Example backup',
+        )
+        self._run_and_check_pass_through(self.client_session.complete(), return_value=result)
 
-    assert expected_result == result
-    assert expected_result is not result
+    def test_discard(self):
+        self._run_and_check_pass_through(self.client_session.discard())

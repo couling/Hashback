@@ -47,7 +47,7 @@ async def about_me(session: ServerSession = Depends(cache.user_session)) -> Clie
 
 @endpoint(http_protocol.BACKUP_LATEST)
 async def get_backup_latest(session: ServerSession = Depends(cache.user_session)) -> Backup:
-    return await session.get_backup()
+    return await session.get_backup(backup_date=None)
 
 
 @endpoint(http_protocol.BACKUP_BY_DATE)
@@ -141,7 +141,7 @@ async def upload_file_content(resume_id: UUID, file: fastapi.UploadFile = fastap
 
 @endpoint(http_protocol.FILE_PARTIAL_SIZE)
 async def file_partial_size(resume_id: UUID, session: BackupSession = Depends(cache.backup_session)) -> int:
-    return await session.check_file_upload_size(resume_id)
+    return await session.check_file_upload_size(resume_id=resume_id)
 
 
 @endpoint(http_protocol.ADD_ROOT_DIR)

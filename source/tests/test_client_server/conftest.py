@@ -1,3 +1,4 @@
+# pylint: disable=redefined-outer-name
 import asyncio
 import importlib
 from datetime import datetime, timezone
