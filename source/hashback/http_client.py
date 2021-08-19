@@ -10,8 +10,8 @@ from uuid import UUID
 
 import requests.auth
 
-from hashback import protocol, http_protocol
-from hashback.protocol import Inode, Directory, DirectoryDefResponse, Backup, BackupSession, ClientConfiguration, \
+from . import protocol, http_protocol
+from .protocol import Inode, Directory, DirectoryDefResponse, Backup, BackupSession, ClientConfiguration, \
     BackupSessionConfig
 
 
@@ -153,14 +153,47 @@ class ClientBackupSession(protocol.BackupSession):
         )
         if result.success:
             assert result.missing_ref is None
-            # TODO considder adding ref_hash into DirectoryDefResponse
+            # TODO consider adding ref_hash into DirectoryDefResponse
             # assert result.ref_hash is not None
         return result
 
-    async def upload_file_content(self, file_content: Union[Path, BinaryIO], resume_id: UUID, resume_from: int = 0,
-                                  is_complete: bool = True) -> Optional[str]:
-        # TODO break large files into multiple requests
+    async def upload_file_content(self, file_content: Union[protocol.FileReader, bytes], resume_id: UUID,
+                                  resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
+        if isinstance(file_content, bytes):
+            return await self._request(
+                endpoint=http_protocol.UPLOAD_FILE,
+                body=file_content,
+                resume_id=resume_id,
+                resume_from=resume_from,
+                is_complete=is_complete
+            )
+
         # TODO detect sparse files and upload in chunks
+        position = resume_from
+        total_size = file_content.file_size
+        bytes_read = await file_content.read(protocol.READ_SIZE)
+        while bytes_read:
+            new_position = position + len(bytes_read)
+            ref_hash = await self._request(
+                endpoint=http_protocol.UPLOAD_FILE,
+                body=bytes_read,
+                resume_id=resume_id,
+                resume_from=position,
+                is_complete=is_complete if new_position == total_size else False
+            )
+            if new_position == total_size:
+                return ref_hash
+            position = new_position
+            bytes_read = await file_content.read(protocol.READ_SIZE)
+        if is_complete:
+            return await self._request(
+                endpoint=http_protocol.UPLOAD_FILE,
+                body=bytes(),
+                resume_id=resume_id,
+                position=position,
+                is_complete=True,
+            )
+
         result: http_protocol.UploadFileContentResponse = await self._request(http_protocol.UPLOAD_FILE,
             body=file_content,
             resume_id=resume_id,
@@ -220,9 +253,6 @@ class BasicAuthClient(Client):
 
         if body is None:
             return self._send_raw_request(endpoint.method, url, stream_response)
-        if isinstance(body, Path):
-            with body.open('rb') as file:
-                return self._send_raw_request(endpoint.method, url, stream_response, files={'file': file})
         if isinstance(body, bytes):
             return self._send_raw_request(endpoint.method, url, stream_response, files={'file': body})
         if hasattr(body, 'json'):

@@ -1,11 +1,12 @@
 import enum
+import functools
 import hashlib
 import os
 import stat
 from abc import abstractmethod
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Protocol, Dict, Optional, Union, BinaryIO, List, NamedTuple, Tuple
+from typing import Protocol, Dict, Optional, Union, List, NamedTuple, Tuple
 from uuid import UUID, uuid4
 
 import aiofiles.os
@@ -15,7 +16,6 @@ from pydantic import BaseModel, Field, validator
 # This will either get bumped, or the file will be duplicated and each one will have a VERSION.  In any case this file
 # specifies protocol version ...
 VERSION = "1.0"
-
 
 EMPTY_FILE = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 READ_SIZE = 1024**2
@@ -77,6 +77,7 @@ class DirectoryHash(NamedTuple):
 
 
 class Directory(BaseModel):
+
     __root__: Dict[str, Inode]
 
     @property
@@ -96,6 +97,7 @@ class Directory(BaseModel):
 
 
 class Backup(BaseModel):
+
     client_id: UUID
     client_name: str
     backup_date: datetime
@@ -106,6 +108,7 @@ class Backup(BaseModel):
 
 
 class FileReader(Protocol):
+
     @abstractmethod
     async def read(self, num_bytes: int = None) -> bytes:
         """
@@ -139,6 +142,7 @@ class FileReader(Protocol):
 
 
 class DirectoryDefResponse(BaseModel):
+
     # This will be set on success but not on error
     ref_hash: Optional[str]
 
@@ -237,8 +241,8 @@ class BackupSession(Protocol):
         """
 
     @abstractmethod
-    async def upload_file_content(self, file_content: Union[Path, BinaryIO], resume_id: UUID,
-                                  resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
+    async def upload_file_content(self, file_content: Union[FileReader, bytes], resume_id: UUID, resume_from: int = 0,
+                                  is_complete: bool = True) -> Optional[str]:
         """
         Upload a file, or part of a file to the server.  The server will respond with an ID (the hash) for that file.
         If the upload is interrupted, then the backup can resume where it left off by first calling
@@ -463,27 +467,35 @@ def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta, 
     return datetime.fromtimestamp(timestamp, client_timezone)
 
 
-def hash_content(content: Union[bytes, str, BinaryIO, Path]) -> str:
+@functools.singledispatch
+def hash_content(content: bytes) -> str:
+    """
+    Generate an sha256sum for the given content.
+    """
+    hash_object = hashlib.sha256()
+    hash_object.update(content)
+    return hash_object.hexdigest()
+
+
+@hash_content.register
+def _(content: str) -> str:
+    """
+    Generate an sha256sum for the given content.
+    """
+    return hash_content(content.encode("utf-8"))
+
+
+@hash_content.register
+async def _(content: FileReader):
     """
     Generate an sha256sum for the given content.  Yes this is absolutely part of the protocol!
     Either the server or client can hash the same file and the result MUST match on both sides or things will break.
     """
     hash_object = hashlib.sha256()
-    if isinstance(content, bytes):
-        hash_object.update(content)
-    elif isinstance(content, str):
-        hash_object.update(content.encode("utf-8"))
-    elif isinstance(content, Path):
-        with content.open('rb') as file:
-            bytes_read = file.read(READ_SIZE)
-            while bytes_read:
-                hash_object.update(bytes_read)
-                bytes_read = file.read(READ_SIZE)
-    else:
-        bytes_read = content.read(READ_SIZE)
-        while bytes_read:
-            hash_object.update(bytes_read)
-            bytes_read = content.read(READ_SIZE)
+    bytes_read = await content.read(READ_SIZE)
+    while bytes_read:
+        hash_object.update(hash_object)
+        bytes_read = await content.read(READ_SIZE)
     return hash_object.hexdigest()
 
 

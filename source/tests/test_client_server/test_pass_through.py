@@ -18,11 +18,6 @@ from hashback.protocol import ClientConfiguration, BackupSession
 from .constants import EXAMPLE_DIR, EXAMPLE_DIR_INODE
 
 
-def test_login(client: ClientSession, client_config: ClientConfiguration, mock_local_db):
-    assert client.client_config == client_config
-    assert {'client_id_or_name': 'test_user'} in (call.kwargs for call in mock_local_db.open_client_session.mock_calls)
-
-
 class BaseTestPassThrough:
 
     mock_backend_session: MagicMock
@@ -223,10 +218,12 @@ class TestPassThroughBackupSession(BaseTestPassThrough):
         self._run_and_check_pass_through(self.client_session.directory_def(EXAMPLE_DIR, replaces),
                                          return_value=expected_result)
 
+    def test_add_root(self):
+        self._run_and_check_pass_through(self.client_session.add_root_dir('some_child', EXAMPLE_DIR_INODE))
+
     def test_check_file_upload_size(self):
         self._run_and_check_pass_through(self.client_session.check_file_upload_size(resume_id=uuid4()),
                                          return_value=10678)
-
 
     def test_complete(self):
         result = protocol.Backup(

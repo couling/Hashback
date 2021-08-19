@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -34,10 +33,10 @@ def server_session(local_database: LocalDatabase, client_config: ClientConfigura
 
 @pytest.fixture()
 def previous_backup(server_session: LocalDatabaseServerSession, client_config: ClientConfiguration, tmp_path: Path
-                  ) -> Backup:
+                    ) -> Backup:
     async def upload() -> Backup:
         backup_session = await server_session.start_backup(datetime.now(timezone.utc), description="New Backup")
-        ref_hash = await backup_session.upload_file_content(file_content=BytesIO(file_text.encode()), resume_id=uuid4())
+        ref_hash = await backup_session.upload_file_content(file_content=file_text.encode(), resume_id=uuid4())
         assert ref_hash == file_hash
         response = await backup_session.directory_def(directory)
         assert response.success

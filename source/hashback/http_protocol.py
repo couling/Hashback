@@ -12,7 +12,7 @@ DEFAULT_PORT = 4649
 class Endpoint(NamedTuple):
     method: str
     url_stub: str
-    query_params: set
+    query_params: Optional[set]
     result_type: Optional[Type]
 
     _CONVERSIONS = {

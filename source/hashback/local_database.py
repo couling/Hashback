@@ -5,17 +5,16 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Union, BinaryIO, List, Tuple
+from typing import Optional, Union, List, Tuple
 from uuid import UUID, uuid4
 
-import aiofiles
 from pydantic import BaseModel
 
 from . import protocol
+from .file_reader import AsyncFile, async_stat
 from .protocol import Inode, Directory, Backup, BackupSessionConfig
 
 _CONFIG_FILE = 'config.json'
-
 
 
 logger = logging.getLogger(__name__)
@@ -185,18 +184,13 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         if inode.type not in (protocol.FileType.REGULAR, protocol.FileType.LINK, protocol.FileType.PIPE):
             raise ValueError(f"Cannot read a file type {inode.type}")
 
+        result_path = self._database.store_path_for(inode.hash)
         if target_path is not None:
-            async with aiofiles.open(self._database.store_path_for(inode.hash), 'rb') as content:
+            with await AsyncFile.open(result_path, "r") as content:
                 await protocol.restore_file(target_path, inode, content, restore_owner, restore_permissions)
             return None
 
-        result_path = self._database.store_path_for(inode.hash)
-        result_size = result_path.stat().st_size
-        result = await aiofiles.open(self._database.store_path_for(inode.hash),"rb")
-        result.file_size = result_size
-        result.__enter__ = lambda s: result
-        result.__exit__ = lambda *_, **__: result.close()
-        return result
+        return await AsyncFile.open(result_path, "r")
 
     def complete_backup(self, meta: protocol.Backup, overwrite: bool):
         backup_path = self._path_for_backup_date(meta.backup_date)
@@ -275,37 +269,36 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         # Success
         return protocol.DirectoryDefResponse(ref_hash=directory_hash)
 
-    async def upload_file_content(self, file_content: Union[Path, BinaryIO], resume_id: UUID,
+    async def upload_file_content(self, file_content: Union[protocol.FileReader, bytes], resume_id: UUID,
                                   resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
         if not self.is_open:
             raise protocol.SessionClosed()
         hash_object = hashlib.sha256()
         temp_file = self._temp_path(resume_id)
-        if isinstance(file_content, Path):
-            file_content = file_content.open('rb')
-            # We only seek if this is a path... That's because the path is a full file where BinaryIO may be partial.
-            # We trust the calling code to have already seeked to the correct position.
-            file_content.seek(resume_from, os.SEEK_SET)
-        with file_content, temp_file.open('wb') as target:
-            # If we are resuming the file
-            if is_complete:
-                if resume_from:
-                    while target.tell() < resume_from:
-                        bytes_read = target.read(max(protocol.READ_SIZE, resume_from - target.tell()))
-                        if not bytes_read:
-                            bytes_read = bytes(max(protocol.READ_SIZE, resume_from - target.tell()))
-                        hash_object.update(bytes_read)
-            # In the event this is a partial file we may not end up with our current position in the right place
-            # because resume_from > partial file length.  seek will put us in the right position.
-            if resume_from > 0:
+        with await AsyncFile.open(temp_file, 'w') as target:
+            # If we are completing the file we must hash it.
+            if is_complete and resume_from > 0:
+                while target.tell() < resume_from:
+                    bytes_read = await target.read(min(protocol.READ_SIZE, resume_from - target.tell()))
+                    if not bytes_read:
+                        bytes_read = bytes(resume_from - target.tell())
+                        target.seek(resume_from, os.SEEK_SET)
+                    hash_object.update(bytes_read)
+            # If not complete then we just seek to the requested resume_from position
+            elif resume_from > 0:
                 target.seek(resume_from, os.SEEK_SET)
 
             # Write the file content
-            bytes_read = file_content.read(protocol.READ_SIZE)
-            while bytes_read:
-                hash_object.update(bytes_read)
-                target.write(bytes_read)
-                bytes_read = file_content.read(protocol.READ_SIZE)
+            if isinstance(file_content, bytes):
+                hash_object.update(file_content)
+                await target.write(file_content)
+            else:
+                bytes_read = await file_content.read(protocol.READ_SIZE)
+                while bytes_read:
+                    if is_complete:
+                        hash_object.update(bytes_read)
+                    await target.write(bytes_read)
+                    bytes_read = await file_content.read(protocol.READ_SIZE)
 
         if not is_complete:
             return None
@@ -313,8 +306,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         # Move the temporary file to new_objects named as it's hash
         ref_hash = hash_object.hexdigest()
         if self._object_exists(ref_hash):
-            # Theoretically this
-            logger.debug(f"File already exists after upload {ref_hash}")
+            logger.warning(f"File already exists after upload {resume_id} as {ref_hash}")
             temp_file.unlink()
         else:
             logger.debug(f"File upload complete {resume_id} as {ref_hash}")
@@ -333,7 +325,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     async def check_file_upload_size(self, resume_id: UUID) -> int:
         if not self.is_open:
             raise protocol.SessionClosed()
-        return self._temp_path(resume_id).stat().st_size
+        return (await async_stat(self._temp_path(resume_id))).st_size
 
     async def complete(self) -> protocol.Backup:
         if not self.is_open:
