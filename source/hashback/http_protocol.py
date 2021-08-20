@@ -97,14 +97,6 @@ class ServerProperties(BaseModel):
         return cls.parse_obj(params)
 
 
-class UploadFileContentResponse(BaseModel):
-    __root__: str
-
-    @property
-    def ref_hash(self) -> str:
-        return self.__root__
-
-
 class FilePartialSizeResponse(BaseModel):
     __root__: int
 
@@ -134,7 +126,7 @@ DISCARD_BACKUP = Endpoint('DELETE', '/backup-session/{session_id}', None, None)
 COMPLETE_BACKUP = Endpoint('POST', '/backup-session/{session_id}/complete', None, protocol.Backup)
 DIRECTORY_DEF = Endpoint('POST', '/backup-session/{session_id}/directory', {'replaces'}, protocol.DirectoryDefResponse)
 UPLOAD_FILE = Endpoint('POST', '/backup-session/{session_id}/file', {'resume_id', 'resume_from', 'is_complete'},
-                       UploadFileContentResponse)
+                       Optional[str])
 FILE_PARTIAL_SIZE = Endpoint('GET', '/backup-session/{session_id}/file-partial-size', {'resume_id'},
                              FilePartialSizeResponse)
 ADD_ROOT_DIR = Endpoint('PUT', '/backup-session/{session_id}/roots/{root_dir_name}', None, None)

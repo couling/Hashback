@@ -129,14 +129,13 @@ async def directory_definition(definition: protocol.Directory, replaces: Optiona
 async def upload_file_content(resume_id: UUID, file: fastapi.UploadFile = fastapi.File(...),
                               session: BackupSession = Depends(cache.backup_session),
                               resume_from: int = 0, is_complete: bool = True
-                              ) -> http_protocol.UploadFileContentResponse:
-    ref_hash = await session.upload_file_content(
-        file_content=file.file,
+                              ) -> str:
+    return await session.upload_file_content(
+        file_content=file,
         resume_id=resume_id,
         resume_from=resume_from,
         is_complete=is_complete,
     )
-    return http_protocol.UploadFileContentResponse(__root__=ref_hash)
 
 
 @endpoint(http_protocol.FILE_PARTIAL_SIZE)

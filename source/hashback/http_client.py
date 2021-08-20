@@ -7,7 +7,7 @@ from os import SEEK_SET, SEEK_END
 from pathlib import Path
 from typing import Optional, BinaryIO, Union, Protocol, Any, Dict, List, Tuple
 from uuid import UUID
-
+import json
 import requests.auth
 
 from . import protocol, http_protocol
@@ -193,16 +193,9 @@ class ClientBackupSession(protocol.BackupSession):
                 position=position,
                 is_complete=True,
             )
+        # Here we have reached the end of the content and we do not need to mark the file as complete
+        return None
 
-        result: http_protocol.UploadFileContentResponse = await self._request(http_protocol.UPLOAD_FILE,
-            body=file_content,
-            resume_id=resume_id,
-            resume_from=resume_from,
-            is_complete=is_complete
-        )
-        if is_complete and result.ref_hash is None:
-            raise protocol.InvalidResponseError("Server returned None for complete hashed file")
-        return result.ref_hash
 
     async def add_root_dir(self, root_dir_name: str, inode: Inode) -> None:
         await self._request(http_protocol.ADD_ROOT_DIR, body=inode, root_dir_name=root_dir_name)
@@ -300,7 +293,7 @@ class BasicAuthClient(Client):
                 return None
             if hasattr(endpoint.result_type, 'parse_raw'):
                 return endpoint.result_type.parse_raw(server_response.content)
-            raise ValueError(f'Cannot parse result type {endpoint.result_type.__name__}')
+            return json.loads(server_response.content)
 
         finally:
             # If we need to close the result, it might not be a good idea to close without reading the content

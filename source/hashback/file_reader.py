@@ -1,10 +1,10 @@
 import asyncio
+import io
+import os
 from concurrent.futures import ThreadPoolExecutor, Executor
 from pathlib import Path
 from typing import BinaryIO
 from typing import Optional
-import io
-import os
 
 from . import protocol
 
@@ -64,13 +64,12 @@ class AsyncFile(protocol.FileReader):
                 return self._buffer[:self._offset]
             return buffer
 
-        else:
-            result = await asyncio.get_running_loop().run_in_executor(self._executor, self._file.read, -1)
-            if self._buffer:
-                result = self._buffer[self._offset:] + result
-                del self._buffer
-                self._offset = 0
-            return result
+        result = await asyncio.get_running_loop().run_in_executor(self._executor, self._file.read, -1)
+        if self._buffer:
+            result = self._buffer[self._offset:] + result
+            del self._buffer
+            self._offset = 0
+        return result
 
     def seek(self, offset: int, whence: int):
         if self._buffer:

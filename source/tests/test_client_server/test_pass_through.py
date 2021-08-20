@@ -7,6 +7,7 @@ import asyncio
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Optional
 from unittest.mock import MagicMock, AsyncMock
 from uuid import uuid4
 
@@ -198,6 +199,34 @@ class TestPassThroughServerSession(BaseTestPassThrough):
             assert restored_content == content
 
 
+class MockFileReader(protocol.FileReader):
+
+    def __init__(self, parts=(b"this ", b"is ", b" a ", b"test!"), streaming: bool = False):
+        self.parts = parts
+        self.streaming = streaming
+        self._iter = iter(parts)
+
+    def reset(self):
+        self._iter = iter(self.parts)
+
+    async def read(self, num_bytes: int = -1) -> bytes:
+        try:
+            result = next(self._iter)
+            assert num_bytes < 0 or len(result) <= num_bytes
+            return result
+        except StopIteration:
+            return b""
+
+    def close(self):
+        pass
+
+    @property
+    def file_size(self) -> Optional[int]:
+        if self.streaming:
+            return None
+        return sum(len(part) for part in self.parts)
+
+
 class TestPassThroughBackupSession(BaseTestPassThrough):
 
     client_session: BackupSession
@@ -217,6 +246,49 @@ class TestPassThroughBackupSession(BaseTestPassThrough):
         self.mock_backend_session.directory_def = AsyncMock(return_value=expected_result)
         self._run_and_check_pass_through(self.client_session.directory_def(EXAMPLE_DIR, replaces),
                                          return_value=expected_result)
+
+    @pytest.mark.parametrize('is_complete', (True, False))
+    @pytest.mark.parametrize('file_content', (
+        MockFileReader(parts=(b"this ", b"is ", b"a ", b"test!"),streaming=True),
+        MockFileReader(parts=(b"this ", b"is ", b"a ", b"test!"), streaming=False),
+        b"this is a test!",
+    ))
+    def test_upload_file(self, is_complete: bool, file_content):
+        async def mock_callback(**kwargs):
+            if not isinstance(kwargs['file_content'], bytes):
+                kwargs['file_content'] = await kwargs['file_content'].read()
+            calls.append(kwargs)
+            # Note this is_complete is NOT the same as the outer is_complete
+            if kwargs['is_complete']:
+                return mock_ref_hash
+            return None
+
+        calls = []
+        mock_ref_hash = "this is a ref hash" if is_complete else None
+        resume_id = uuid4()
+        self.mock_backend_session.upload_file_content = mock_callback
+        if isinstance(file_content, MockFileReader):
+            file_content.reset()
+        result = asyncio.get_event_loop().run_until_complete(self.client_session.upload_file_content(
+            file_content=file_content,
+            resume_id=resume_id,
+            resume_from=0,
+            is_complete=is_complete,
+        ))
+
+        assert result == mock_ref_hash
+        if isinstance(file_content, MockFileReader):
+            assert len(calls) == len(file_content.parts) + (1 if file_content.streaming and is_complete else 0)
+            for call, expected_content in zip(calls, file_content.parts):
+                assert call['resume_id'] == resume_id
+                assert call['file_content'] == expected_content
+        else:
+            assert len(calls) == 1
+            assert calls[0]['file_content'] == file_content
+
+        for call in calls[:-1]:
+            assert not call['is_complete']
+        assert calls[-1]['is_complete'] == is_complete
 
     def test_add_root(self):
         self._run_and_check_pass_through(self.client_session.add_root_dir('some_child', EXAMPLE_DIR_INODE))
