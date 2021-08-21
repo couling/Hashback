@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from hashback.local_database import LocalDatabase, LocalDatabaseServerSession, Configuration
-from hashback.protocol import ClientConfiguration, Backup, Inode, Directory, FileType
+from hashback.protocol import ClientConfiguration, Backup, Inode, Directory, FileType, SessionClosed
 
 
 @pytest.fixture(scope='function')
@@ -105,3 +105,13 @@ def test_backup_can_be_retrieved(previous_backup: Backup, server_session: LocalD
                     assert retrieved_content == file.read()
 
     asyncio.get_event_loop().run_until_complete(check())
+
+
+def test_open_session_by_name(local_database: LocalDatabase, server_session: LocalDatabaseServerSession):
+    new_session = local_database.open_client_session(server_session.client_config.client_name)
+    assert new_session.client_config == server_session.client_config
+
+
+def test_open_session_failed(local_database: LocalDatabase):
+    with pytest.raises(SessionClosed):
+        local_database.open_client_session(str(uuid4()))

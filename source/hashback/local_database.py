@@ -41,11 +41,14 @@ class LocalDatabase:
 
     def open_client_session(self, client_id_or_name: str) -> "LocalDatabaseServerSession":
         try:
-            client_path = self._base_path / self._CLIENT_DIR / client_id_or_name
-            if client_path.is_symlink():
-                client_id = os.readlink(client_path)
-                client_path = self._base_path / self._CLIENT_DIR / client_id
-
+            try:
+                client_id = UUID(client_id_or_name)
+                client_path = self._base_path / self._CLIENT_DIR / str(client_id)
+            except ValueError:
+                client_path = self._base_path / self._CLIENT_DIR / client_id_or_name
+                if client_path.is_symlink():
+                    client_id = os.readlink(client_path)
+                    client_path = self._base_path / self._CLIENT_DIR / client_id
             return LocalDatabaseServerSession(self, client_path)
         except FileNotFoundError as exc:
             logger.error(f"Session not found {client_id_or_name}")

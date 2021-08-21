@@ -202,6 +202,7 @@ class TestPassThroughServerSession(BaseTestPassThrough):
 class MockFileReader(protocol.FileReader):
 
     def __init__(self, parts=(b"this ", b"is ", b" a ", b"test!"), streaming: bool = False):
+        super().__init__()
         self.parts = parts
         self.streaming = streaming
         self._iter = iter(parts)
