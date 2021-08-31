@@ -7,7 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from hashback.local_database import LocalDatabase, LocalDatabaseServerSession, Configuration
+from hashback import protocol
+from hashback.local_database import LocalDatabase, LocalDatabaseServerSession, Configuration, LocalDatabaseBackupSession
 from hashback.protocol import ClientConfiguration, Backup, Inode, Directory, FileType, SessionClosed
 
 
@@ -29,6 +30,13 @@ def local_database(tmp_path: Path, local_database_configuration, client_config) 
 @pytest.fixture(scope='function')
 def server_session(local_database: LocalDatabase, client_config: ClientConfiguration) -> LocalDatabaseServerSession:
     return local_database.open_client_session(str(client_config.client_id))
+
+
+@pytest.fixture(scope='function')
+def backup_session(server_session) -> LocalDatabaseBackupSession:
+    return asyncio.get_event_loop().run_until_complete(
+        server_session.start_backup(datetime.now(timezone.utc)),
+    )
 
 
 @pytest.fixture()
@@ -115,3 +123,55 @@ def test_open_session_by_name(local_database: LocalDatabase, server_session: Loc
 def test_open_session_failed(local_database: LocalDatabase):
     with pytest.raises(SessionClosed):
         local_database.open_client_session(str(uuid4()))
+
+
+def test_get_backup_can_return_none(server_session: LocalDatabaseServerSession):
+    result = asyncio.get_event_loop().run_until_complete(server_session.get_backup())
+    assert result is None
+
+
+class TestWithBackup:
+    server_session: LocalDatabaseServerSession
+    backup_session: LocalDatabaseBackupSession
+
+    @pytest.fixture(autouse=True)
+    def _initialize_self(self, server_session: LocalDatabaseServerSession, backup_session: LocalDatabaseBackupSession):
+        self.server_session = server_session
+        self.backup_session = backup_session
+
+    def test_duplicate_backup(self):
+        asyncio.get_event_loop().run_until_complete(
+            self.backup_session.complete()
+        )
+        with pytest.raises(protocol.DuplicateBackup):
+            asyncio.get_event_loop().run_until_complete(
+                self.server_session.start_backup(self.backup_session.config.backup_date)
+            )
+
+    def test_resume_backup_by_id(self):
+        new_session = asyncio.get_event_loop().run_until_complete(
+            self.server_session.resume_backup(session_id=self.backup_session.config.session_id)
+        )
+        assert new_session is not self.backup_session
+        assert new_session.config == self.backup_session.config
+
+    def test_resume_backup_by_date(self):
+        new_session = asyncio.get_event_loop().run_until_complete(
+            self.server_session.resume_backup(backup_date=self.backup_session.config.backup_date)
+        )
+        assert new_session is not self.backup_session
+        assert new_session.config == self.backup_session.config
+
+    def test_list_backup_sessions(self):
+        all_sessions = asyncio.get_event_loop().run_until_complete(
+            self.server_session.list_backup_sessions()
+        )
+        assert all_sessions == [self.backup_session.config]
+
+    def test_list_backups(self):
+        async def complete_and_list():
+            await self.backup_session.complete()
+            return await self.server_session.list_backups()
+
+        all_backups = asyncio.get_event_loop().run_until_complete(complete_and_list())
+        assert all_backups == [(self.backup_session.config.backup_date, self.backup_session.config.description)]

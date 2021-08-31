@@ -105,6 +105,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
                                                      self.client_config.timezone)
 
         if not allow_overwrite:
+            # TODO consider raising the same exception if an open session already exists for the same date
             if self._path_for_backup_date(backup_date).exists():
                 raise protocol.DuplicateBackup(f"Backup exists {backup_date.isoformat()}")
 
@@ -135,7 +136,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
                                                          self.client_config.timezone)
             for session_path in (self._client_path / self._SESSIONS).iterdir():
                 session = LocalDatabaseBackupSession(self, session_path)
-                if session.backup_date == backup_date:
+                if session.config.backup_date == backup_date:
                     return session
 
             raise protocol.NotFoundException(f"Backup date not found {backup_date}")
@@ -227,14 +228,6 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     @property
     def config(self) -> BackupSessionConfig:
         return self._config
-
-    @property
-    def session_id(self) -> UUID:
-        return UUID(self._session_path.name)
-
-    @property
-    def backup_date(self) -> datetime:
-        return self._config.backup_date
 
     async def directory_def(self, definition: protocol.Directory, replaces: Optional[UUID] = None
                             ) -> protocol.DirectoryDefResponse:
