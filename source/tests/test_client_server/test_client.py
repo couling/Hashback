@@ -1,9 +1,11 @@
 import asyncio
+import pytest
 
 from hashback.http_client import ClientSession
-from hashback.protocol import ClientConfiguration
+from hashback.protocol import ClientConfiguration, InternalServerError
 from hashback.server import SERVER_VERSION
-
+from mock import AsyncMock
+from datetime import datetime, timezone
 
 def test_login(client: ClientSession, client_config: ClientConfiguration, mock_local_db):
     assert client.client_config == client_config
@@ -16,3 +18,10 @@ def test_server_version(client: ClientSession):
     assert result == SERVER_VERSION
     # This ensures the server version came from the server and NOT the client
     assert result is not SERVER_VERSION
+
+
+@pytest.mark.parametrize('exc', (ValueError, OSError))
+def test_internal_server_error(client: ClientSession, mock_local_db, exc):
+    mock_local_db.get_backup = AsyncMock(side_effect=exc)
+    with pytest.raises(InternalServerError):
+        asyncio.get_event_loop().run_until_complete(client.get_backup(backup_date=datetime.now(timezone.utc)))

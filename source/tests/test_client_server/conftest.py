@@ -49,7 +49,7 @@ def mock_backup_session(client_config: ClientConfiguration) -> MagicMock:
 def mock_server(monkeypatch: pytest.MonkeyPatch, mock_local_db: MagicMock) -> TestClient:
     importlib.reload(cache)
     monkeypatch.setattr(config, 'LOCAL_DATABASE', mock_local_db)
-    result = TestClient(app.app)
+    result = TestClient(app.app, raise_server_exceptions=False)
     # The test client has a broken close() method
     TestClient.close = lambda _: None
     return result

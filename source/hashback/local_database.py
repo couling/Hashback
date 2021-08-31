@@ -53,9 +53,6 @@ class LocalDatabase:
         except FileNotFoundError as exc:
             logger.error(f"Session not found {client_id_or_name}")
             raise protocol.SessionClosed(f"No such session {client_id_or_name}") from exc
-        except OSError as exc:
-            logger.error("Could not load session", exc_info=True)
-            raise protocol.InternalServerError() from exc
 
     def store_path_for(self, ref_hash: str) -> Path:
         split_size = self.config.store_split_size

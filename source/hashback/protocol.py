@@ -32,10 +32,10 @@ class FileType(enum.Enum):
 
 
 class Inode(BaseModel):
-    modified_time: datetime
     type: FileType
     mode: int
-    size: int
+    modified_time: Optional[datetime]
+    size: Optional[int]
     uid: int
     gid: int
     hash: Optional[str] = None
@@ -60,13 +60,15 @@ class Inode(BaseModel):
 
     @classmethod
     def from_stat(cls, struct_stat, hash_value: Optional[str]) -> "Inode":
+        file_type = cls._type(struct_stat.st_mode)
         return Inode(
             mode=stat.S_IMODE(struct_stat.st_mode),
-            type=cls._type(struct_stat.st_mode),
-            size=struct_stat.st_size,
+            type=file_type,
+            size=struct_stat.st_size if file_type is FileType.REGULAR else None,
             uid=struct_stat.st_uid,
             gid=struct_stat.st_gid,
-            modified_time=datetime.fromtimestamp(struct_stat.st_mtime, timezone.utc),
+            modified_time=datetime.fromtimestamp(struct_stat.st_mtime, timezone.utc) \
+                            if file_type is FileType.REGULAR else None,
             hash=hash_value,
         )
 
