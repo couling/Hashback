@@ -4,7 +4,7 @@ import pytest
 from hashback.http_client import ClientSession
 from hashback.protocol import ClientConfiguration, InternalServerError
 from hashback.server import SERVER_VERSION
-from mock import AsyncMock
+from unittest.mock import AsyncMock
 from datetime import datetime, timezone
 
 def test_login(client: ClientSession, client_config: ClientConfiguration, mock_local_db):
