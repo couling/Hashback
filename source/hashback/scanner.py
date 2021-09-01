@@ -13,9 +13,6 @@ from .misc import str_exception
 logger = logging.getLogger(__name__)
 
 
-__all__ = ['Scanner']
-
-
 class SkipThis(Exception):
     pass
 

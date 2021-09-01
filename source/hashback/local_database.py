@@ -332,7 +332,8 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                 logger.debug(f"Moving {file_path.name} to store")
                 file_path.rename(target_path)
             except FileExistsError:
-                pass
+                # This should be rare.  To happen two concurrent backup sessions must try to add the same new file.
+                logger.warning(f"Another session has already uploaded {file_path.name}... skipping file.")
         roots = {}
         for file_path in (self._session_path / self._ROOTS).iterdir():
             with file_path.open('r') as file:

@@ -1,11 +1,13 @@
 import asyncio
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
 import pytest
 
 from hashback.http_client import ClientSession
 from hashback.protocol import ClientConfiguration, InternalServerError
 from hashback.server import SERVER_VERSION
-from unittest.mock import AsyncMock
-from datetime import datetime, timezone
+
 
 def test_login(client: ClientSession, client_config: ClientConfiguration, mock_local_db):
     assert client.client_config == client_config
