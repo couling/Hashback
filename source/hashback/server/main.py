@@ -24,8 +24,3 @@ def main(host: List[str], port: int):
     log_config['formatters']['default']['fmt'] = DEFAULT_LOG_FORMAT
     del log_config['loggers']['uvicorn']['handlers']
     run(f"{app.__name__}:app", access_log=True, log_config=log_config, host=host, port=port)
-
-
-if __name__ == '__main__':
-    # pylint: disable=no-value-for-parameter
-    main()
