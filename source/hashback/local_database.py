@@ -85,6 +85,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
     _BACKUPS = 'backup'
     _SESSIONS = 'sessions'
     _TIMESTMAP_FORMAT = "%Y-%m-%d_%H:%M:%S.%f"
+    _DIR_SUFFIX = ".d"
 
     client_config: protocol.ClientConfiguration = None
 
@@ -177,7 +178,8 @@ class LocalDatabaseServerSession(protocol.ServerSession):
     async def get_directory(self, inode: Inode) -> Directory:
         if inode.type != protocol.FileType.DIRECTORY:
             raise ValueError(f"Cannot open file type {inode.type} as a directory")
-        with self._database.store_path_for(inode.hash).open('r') as file:
+        inode_hash = inode.hash + self._DIR_SUFFIX
+        with self._database.store_path_for(inode_hash).open('r') as file:
             return Directory.parse_raw(file.read())
 
     async def get_file(self, inode: Inode, target_path: Optional[Path] = None,
@@ -238,7 +240,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                 raise protocol.InvalidArgumentsError(f"Child {name} has no hash value")
 
         directory_hash, content = definition.hash()
-        if self._object_exists(directory_hash):
+        if self._object_exists(directory_hash + self._server_session._DIR_SUFFIX):
             # An empty response here means "success".
             return protocol.DirectoryDefResponse()
 
@@ -254,7 +256,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         with tmp_path.open('xb') as file:
             try:
                 file.write(content)
-                tmp_path.rename(self._store_path_for(directory_hash))
+                tmp_path.rename(self._store_path_for(directory_hash + self._server_session._DIR_SUFFIX))
             except:
                 tmp_path.unlink()
                 raise
@@ -309,7 +311,10 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     async def add_root_dir(self, root_dir_name: str, inode: protocol.Inode) -> None:
         if not self.is_open:
             raise protocol.SessionClosed()
-        if not self._object_exists(inode.hash):
+        location_hash = inode.hash
+        if inode.type is protocol.FileType.DIRECTORY:
+            location_hash += self._server_session._DIR_SUFFIX
+        if not self._object_exists(location_hash):
             raise ValueError(f"Cannot create {root_dir_name} - does not exist: {inode.hash}")
         file_path = self._session_path / self._ROOTS / root_dir_name
         with file_path.open('x') as file:
