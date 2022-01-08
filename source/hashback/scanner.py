@@ -226,10 +226,16 @@ class Scanner:
         logger.info(f"Uploading {missing_file_path}")
         try:
             with await AsyncFile.open(missing_file_path, 'r') as missing_file_content:
-                directory.children[missing_file].hash = await self.backup_session.upload_file_content(
+                resume_id = uuid4()
+                new_hash = await self.backup_session.upload_file_content(
                     file_content=missing_file_content,
-                    resume_id=uuid4(),
+                    resume_id=resume_id,
                 )
+                if new_hash != directory.children[missing_file].hash:
+                    logger.warning(f"Calculated hash for {missing_file_path} ({resume_id}) was "
+                                   f"{directory.children[missing_file].hash} but server thinks it's {new_hash}.  "
+                                   f"Did the file content change?")
+                    directory.children[missing_file].hash = new_hash
             logger.debug(f"Uploaded {missing_file} - {directory.children[missing_file].hash}")
         except FileNotFoundError:
             logger.error(f"File disappeared before it could be uploaded: {path / missing_file}")

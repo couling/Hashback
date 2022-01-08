@@ -253,6 +253,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                 missing.append(name)
 
         if missing:
+            logger.debug(f"Directory def missing {len(missing)} items in store")
             return protocol.DirectoryDefResponse(missing_files=missing)
 
         tmp_path = self._temp_path()
@@ -265,6 +266,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                 raise
 
         # Success
+        logger.debug(f"Directory def created {directory_hash}")
         return protocol.DirectoryDefResponse(ref_hash=directory_hash)
 
     async def upload_file_content(self, file_content: Union[protocol.FileReader, bytes], resume_id: UUID,
@@ -274,9 +276,11 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         hash_object = hashlib.sha256()
         temp_file = self._temp_path(resume_id)
         complete_partial = is_complete and resume_from > 0
-        with await AsyncFile.open(temp_file, 'r+' if complete_partial else 'w') as target:
+        temp_file.touch()
+        with await AsyncFile.open(temp_file, 'r+') as target:
             # If we are completing the file we must hash it.
             if complete_partial:
+                logger.debug(f"Completing file; re-reading partial for {resume_id}")
                 # TODO sanity check the request to ensure complete_partial always writes to the end of the file
                 target.seek(0, os.SEEK_SET)
                 while target.tell() < resume_from:
@@ -288,12 +292,13 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                     hash_object.update(bytes_read)
                 assert target.tell() == resume_from
             # If not complete then we just seek to the requested resume_from position
-            elif resume_from > 0:
+            else:
                 target.seek(resume_from, os.SEEK_SET)
 
             # Write the file content
             if isinstance(file_content, bytes):
-                hash_object.update(file_content)
+                if is_complete:
+                    hash_object.update(file_content)
                 await target.write(file_content)
             else:
                 bytes_read = await file_content.read(protocol.READ_SIZE)

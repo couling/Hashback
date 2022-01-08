@@ -8,13 +8,16 @@ from pathlib import Path
 from typing import Optional, BinaryIO, Union, Protocol, Any, Dict, List, Tuple
 from uuid import UUID
 import json
+import logging
 
-import fastapi
 import requests.auth
 
 from . import protocol, http_protocol
 from .protocol import Inode, Directory, DirectoryDefResponse, Backup, BackupSession, ClientConfiguration, \
     BackupSessionConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 class Client(Protocol):
@@ -186,6 +189,8 @@ class ClientBackupSession(protocol.BackupSession):
             position = new_position
             bytes_read = await file_content.read(protocol.READ_SIZE)
         if is_complete:
+            logger.warning(f"Expected to upload {file_content.file_size} but only managed {position} before EOF. "
+                           f"Perhaps the file changed.")
             return await self._request(
                 endpoint=http_protocol.UPLOAD_FILE,
                 body=bytes(),
