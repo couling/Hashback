@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from . import protocol
 from .misc import str_exception
+from .file_reader import AsyncFile
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,17 @@ class Scanner:
         """
         if backup_directories is None:
             backup_directories = self.backup_session.server_session.client_config.backup_directories
-        if fast_unsafe:
-            last_backup_roots = (await self.backup_session.server_session.get_backup()).roots
-        else:
-            last_backup_roots = {}
 
         # Scans are internally parallelized.  Let's not gather() this one so we have some opportunity to understand
         # what it was doing if it failed.
         if fast_unsafe:
-            logger.warning("Comparing meta data to last backup, will not check content for existing files.")
+            last_backup = await self.backup_session.server_session.get_backup()
+            if last_backup is None:
+                logger.warning("No previous backup found. This scan will slow-safe not fast-unsafe")
+                last_backup_roots = {}
+            else:
+                last_backup_roots = last_backup.roots
+                logger.warning("Comparing meta data to last backup, will not check content for existing files.")
             for name, scan_spec in backup_directories.items():
                 last_backup = last_backup_roots.get(name)
                 if last_backup is None:
@@ -103,7 +106,8 @@ class Scanner:
         elif inode.type == protocol.FileType.REGULAR:
             if inode != last_scan:
                 logger.debug(f"Hashing {path}")
-                inode.hash = protocol.hash_content(path)
+                with await AsyncFile.open(path, 'r') as content:
+                    inode.hash = await protocol.async_hash_content(content)
 
         elif inode.type == protocol.FileType.LINK:
             inode.hash = protocol.hash_content(os.readlink(path))
@@ -221,10 +225,11 @@ class Scanner:
         missing_file_path = path / missing_file
         logger.info(f"Uploading {missing_file_path}")
         try:
-            directory.children[missing_file].hash = await self.backup_session.upload_file_content(
-                file_content=missing_file_path,
-                resume_id=uuid4(),
-            )
+            with await AsyncFile.open(missing_file_path, 'r') as missing_file_content:
+                directory.children[missing_file].hash = await self.backup_session.upload_file_content(
+                    file_content=missing_file_content,
+                    resume_id=uuid4(),
+                )
             logger.debug(f"Uploaded {missing_file} - {directory.children[missing_file].hash}")
         except FileNotFoundError:
             logger.error(f"File disappeared before it could be uploaded: {path / missing_file}")

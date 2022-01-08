@@ -7,3 +7,4 @@ test_db
 .eggs
 .venv
 dist
+.DS_Store

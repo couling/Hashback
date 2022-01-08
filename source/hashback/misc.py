@@ -4,8 +4,11 @@ import json
 import logging
 import os
 import signal
+import functools
+from pathlib import Path
 from copy import deepcopy
-from typing import Union, Optional, Coroutine, Collection, Dict
+from typing import Union, Optional, Coroutine, Collection, Dict, Any
+
 
 logger = logging.getLogger(__name__)
 
@@ -44,23 +47,13 @@ def setup_logging(default_level: int = logging.INFO):
         logger.warning(f"Unknown log level name {default_level_name} in LOG_LEVEL")
     logger.debug(f"Logging configured to default level {logging.getLevelName(default_level)}")
 
-    for logger_name, level_name in environ_log_levels().items():
+    for logger_name, level_name in json.loads(os.environ.get('LOG_LEVELS', "{}")).items():
         log_level = logging.getLevelName(level_name)
         if not isinstance(log_level, int):
             logger.warning(f"Unknown log level name {level_name} in LOG_LEVELS")
         else:
             logging.getLogger(logger_name).level = log_level
             logger.debug(f"Logging for '{logger_name}' set to {logging.getLevelName(log_level)}")
-
-
-def environ_log_levels() -> Dict:
-    try:
-        raw = json.loads(os.environ.get('LOG_LEVELS', ""))
-        if isinstance(raw, dict):
-            return {key: {'level': value} for key, value in raw.items()}
-    except json.JSONDecodeError:
-        pass
-    return {}
 
 
 def merge(base, update):
@@ -110,3 +103,37 @@ def register_clean_shutdown(numbers: Collection[Union[int, signal.Signals]] = (s
 
 def str_exception(exception: Exception):
     return str(exception) or str(type(exception).__name__)
+
+
+class SettingsConfig:
+    @classmethod
+    def customise_sources(cls, init_settings, env_settings, file_secret_settings):
+        config_path = init_settings.init_kwargs.get('config_path')
+        if config_path is None:
+            return (
+                init_settings,
+                env_settings,
+                file_secret_settings,
+            )
+        return (
+            init_settings,
+            functools.partial(_load_settings, config_path),
+            env_settings,
+            file_secret_settings,
+        )
+
+def _load_settings(file_path: Path, _) -> Dict[str,Any]:
+    with file_path.open('r') as settings_file:
+        return json.load(settings_file)
+
+
+class ContextCloseMixin:
+
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Optional, BinaryIO, Union, Protocol, Any, Dict, List, Tuple
 from uuid import UUID
 import json
+
+import fastapi
 import requests.auth
 
 from . import protocol, http_protocol
@@ -86,7 +88,6 @@ class ClientSession(protocol.ServerSession):
             backup_date=backup_date
         ))
 
-
     async def get_backup(self, backup_date: Optional[datetime] = None) -> Optional[Backup]:
         if backup_date is None:
             return await self._client.request(http_protocol.BACKUP_LATEST)
@@ -118,7 +119,6 @@ class ClientSession(protocol.ServerSession):
                 )
             return None
         return result
-
 
 
 class ClientBackupSession(protocol.BackupSession):
@@ -211,29 +211,29 @@ class ClientBackupSession(protocol.BackupSession):
         return await self._request(http_protocol.DISCARD_BACKUP)
 
 
-class BasicAuthClient(Client):
+class RequestsClient(Client):
     _base_url: str
-    _auth: requests.auth.AuthBase
     _server_version: http_protocol.ServerVersion
     _executor: Executor
     _http_session: requests.Session
 
     def __init__(self, server: http_protocol.ServerProperties):
         super().__init__()
-        self._auth = requests.auth.HTTPBasicAuth(username=server.username, password=server.password)
         server_path = server.copy()
-        server_path.username = None
-        server_path.password = None
+        server_path.credentials = None
         self._base_url = server_path.format_url()
         self._executor = ThreadPoolExecutor(max_workers=10)
         self._http_session = requests.Session()
 
-    async def server_version(self) -> http_protocol.ServerVersion:
-        return await self.request(http_protocol.HELLO)
-
     async def request(self, endpoint: http_protocol.Endpoint, body = None, **params: Any) -> Any:
         return await asyncio.get_running_loop().run_in_executor(
             self._executor, self._request_object, endpoint, params, body)
+
+    async def server_version(self) -> http_protocol.ServerVersion:
+        return await self.request(http_protocol.HELLO)
+
+    async def close(self):
+        self._http_session.close()
 
     def _request_object(self, endpoint: http_protocol.Endpoint, params: Dict[str, Any], body = None):
         response = self._send_request(endpoint, params, body)
@@ -245,17 +245,22 @@ class BasicAuthClient(Client):
         stream_response = isinstance(endpoint.result_type, BinaryIO)
 
         if body is None:
-            return self._send_raw_request(endpoint.method, url, stream_response)
-        if isinstance(body, bytes):
-            return self._send_raw_request(endpoint.method, url, stream_response, files={'file': body})
-        if hasattr(body, 'json'):
-            return self._send_raw_request(endpoint.method, url, stream_response, data=body.json().encode(),
+            response = self._send_raw_request(endpoint.method, url, stream_response)
+        elif isinstance(body, bytes):
+            response = self._send_raw_request(endpoint.method, url, stream_response, files={'file': body})
+        elif hasattr(body, 'json'):
+            response = self._send_raw_request(endpoint.method, url, stream_response, data=body.json().encode(),
                                           headers={'Content-Type': 'application/json'})
-        raise protocol.InvalidArgumentsError(f"Cannot send body type {type(body).__name__}")
+        else:
+            raise protocol.InvalidArgumentsError(f"Cannot send body type {type(body).__name__}")
+        self._check_response(response)
+        return response
 
     def _send_raw_request(self, method: str, url: str, stream_response: bool, **kwargs) -> requests.Response:
-        response = self._http_session.request(method, url, stream=stream_response, auth=self._auth, **kwargs)
+        return self._http_session.request(method, url, stream=stream_response, **kwargs)
 
+    @staticmethod
+    def _check_response(response: requests.Response):
         if response.status_code >= 400:
             status_code = response.status_code
             content = response.content
@@ -277,8 +282,6 @@ class BasicAuthClient(Client):
                 raise protocol.InvalidArgumentsError(message)
             raise protocol.InvalidResponseError(f"Bad response from server {status_code}: {message}")
 
-        return response
-
     def _parse_response(self, endpoint: http_protocol.Endpoint, server_response: requests.Response):
         if endpoint.result_type is protocol.FileReader:
             try:
@@ -291,9 +294,10 @@ class BasicAuthClient(Client):
         try:
             if endpoint.result_type is None:
                 return None
-            if hasattr(endpoint.result_type, 'parse_raw'):
-                return endpoint.result_type.parse_raw(server_response.content)
-            return json.loads(server_response.content)
+            result = json.loads(server_response.content)
+            if result is not None and hasattr(endpoint.result_type, 'parse_obj'):
+                return endpoint.result_type.parse_obj(result)
+            return result
 
         finally:
             # If we need to close the result, it might not be a good idea to close without reading the content

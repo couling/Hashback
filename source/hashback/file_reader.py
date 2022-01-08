@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import BinaryIO
 from typing import Optional
 
-from . import protocol
+from . import protocol, misc
 
 # pylint: disable=invalid-name
 default_executor: Optional[Executor] = None
@@ -20,7 +20,7 @@ def _get_default_executor():
     return default_executor
 
 
-class AsyncFile(protocol.FileReader):
+class AsyncFile(protocol.FileReader, misc.ContextCloseMixin):
 
     _file: BinaryIO
     _buffer: bytes = bytes()

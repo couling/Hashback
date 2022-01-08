@@ -246,7 +246,10 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
 
         missing = []
         for name, inode in definition.children.items():
-            if not self._object_exists(inode.hash):
+            inode_hash = inode.hash
+            if inode.type is protocol.FileType.DIRECTORY:
+                inode_hash += self._server_session._DIR_SUFFIX
+            if not self._object_exists(inode_hash):
                 missing.append(name)
 
         if missing:
@@ -270,15 +273,20 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             raise protocol.SessionClosed()
         hash_object = hashlib.sha256()
         temp_file = self._temp_path(resume_id)
-        with await AsyncFile.open(temp_file, 'w') as target:
+        complete_partial = is_complete and resume_from > 0
+        with await AsyncFile.open(temp_file, 'r+' if complete_partial else 'w') as target:
             # If we are completing the file we must hash it.
-            if is_complete and resume_from > 0:
+            if complete_partial:
+                # TODO sanity check the request to ensure complete_partial always writes to the end of the file
+                target.seek(0, os.SEEK_SET)
                 while target.tell() < resume_from:
                     bytes_read = await target.read(min(protocol.READ_SIZE, resume_from - target.tell()))
                     if not bytes_read:
+                        # TODO prevent memory DOS attack. Limit the chunks this can be fed in for.
                         bytes_read = bytes(resume_from - target.tell())
                         target.seek(resume_from, os.SEEK_SET)
                     hash_object.update(bytes_read)
+                assert target.tell() == resume_from
             # If not complete then we just seek to the requested resume_from position
             elif resume_from > 0:
                 target.seek(resume_from, os.SEEK_SET)
@@ -299,6 +307,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             return None
 
         # Move the temporary file to new_objects named as it's hash
+        # For this purpose we can assume it's a regular file.  As long as it's not a directory that's all okay.
         ref_hash = hash_object.hexdigest()
         if self._object_exists(ref_hash):
             logger.warning(f"File already exists after upload {resume_id} as {ref_hash}")

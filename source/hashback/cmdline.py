@@ -1,13 +1,14 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from urllib.parse import urlparse
 
 import click
 import dateutil.tz
+from pydantic import BaseSettings
 
-from .misc import run_then_cancel, register_clean_shutdown, setup_logging
+from .misc import run_then_cancel, register_clean_shutdown, setup_logging, SettingsConfig
 from .protocol import ServerSession, DuplicateBackup
 from .scanner import Scanner
 
@@ -21,19 +22,22 @@ def main():
 
 
 @click.group()
-@click.option("--database", envvar="BACKUP_DATABASE")
-@click.pass_context
-def click_main(ctx: click.Context, database: str):
-    ctx.obj = select_database(database)
+@click.option("--config-path", default="/etc/hasback/client.json",
+              type=click.Path(path_type=Path, exists=True, file_okay=True, dir_okay=False))
+def click_main(config_path: Path):
+    settings = Settings(config_path=config_path)
+    client = create_client(settings)
+    context = click.get_current_context()
+    context.call_on_close(lambda: run_then_cancel(client.close()))
+    context.obj = client
 
 @click_main.command("backup")
 @click.option("--timestamp", type=click.DateTime(formats=['%Y-%m-%d', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']))
 @click.option("--description")
 @click.option("--overwrite/--no-overwrite", default=False)
 @click.option("--fast-unsafe/--slow-safe", default=True)
-@click.pass_obj
-def backup(server_session: ServerSession, timestamp: datetime, description: Optional[str], fast_unsafe: bool,
-           overwrite: bool):
+def backup(timestamp: datetime, description: Optional[str], fast_unsafe: bool, overwrite: bool):
+    server_session: ServerSession = click.get_current_context().obj
     if timestamp is None:
         timestamp = datetime.now(dateutil.tz.gettz())
     elif timestamp.tzinfo is None:
@@ -64,20 +68,62 @@ def backup(server_session: ServerSession, timestamp: datetime, description: Opti
     run_then_cancel(_backup())
 
 
-def select_database(path: str) -> ServerSession:
-    url = urlparse(path)
+class Settings(BaseSettings):
+    config_path: Path
+    database_url: str
+    client_id: str
+    credentials: Optional[Path] = None
+    logging: Dict[str, Any] = {}
+
+    Config = SettingsConfig
+
+
+def create_client(settings: Settings) -> ServerSession:
+    url = urlparse(settings.database_url)
     if url.scheme == '' or url.scheme == 'file':
-        logger.debug("Loading local database plugin")
-        #pylint: disable=import-outside-toplevel
-        from . import local_database
-        return local_database.LocalDatabase(Path(path)).open_client_session(client_id_or_name=url.username)
+        return _create_local_client(settings)
     if url.scheme == 'http' or url.scheme =='https':
-        logger.debug("Loading http client plugin")
-        #pylint: disable=import-outside-toplevel
-        from  . import http_client, http_protocol
-        server_properties = http_protocol.ServerProperties.parse_url(path)
-        return run_then_cancel(http_client.BasicAuthClient.login(server=server_properties))
+        return _create_http_client(settings)
+
     raise ValueError(f"Unknown scheme {url.scheme}")
+
+
+def _create_local_client(settings: Settings):
+    logger.debug("Loading local database plugin")
+    # pylint: disable=import-outside-toplevel
+    from . import local_database
+    return local_database.LocalDatabase(Path(settings.database_url)).open_client_session(settings.client_id)
+
+
+def _create_http_client(settings: Settings):
+    async def _start_session():
+        server_version = await client.server_version()
+        logger.info(f"Connected to server {server_version.server_type} protocol {server_version.protocol_version}")
+        return await ClientSession.create_session(client)
+
+    logger.debug("Loading http client plugin")
+    # pylint: disable=import-outside-toplevel
+    from . import http_protocol
+    from .http_client import ClientSession
+    server_properties = http_protocol.ServerProperties.parse_url(settings.database_url)
+
+    if settings.credentials is not None:
+        if settings.credentials.is_absolute():
+            credentials_path = server_properties.credentials
+        else:
+            credentials_path = settings.config_path.parent / settings.credentials
+        server_properties.credentials = http_protocol.Credentials.parse_file(credentials_path)
+
+    if settings.credentials is None and server_properties.credentials is None:
+        from .http_client import RequestsClient
+        client = RequestsClient(server_properties)
+    else:
+        from .basic_auth.client import BasicAuthClient
+        client = BasicAuthClient(server_properties)
+
+    session = run_then_cancel(_start_session())
+    return session
+
 
 if __name__ == '__main__':
     main()

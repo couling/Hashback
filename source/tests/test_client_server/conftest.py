@@ -9,9 +9,10 @@ import pytest
 import requests
 from starlette.testclient import TestClient
 
-from hashback.http_client import ClientSession, BasicAuthClient
+from hashback.http_client import ClientSession
+from hashback.basic_auth.client import BasicAuthClient
 from hashback.protocol import ClientConfiguration, BackupSessionConfig, BackupSession
-from hashback.server import cache, config, app
+from hashback.server import app, security
 from tests.test_client_server.constants import SERVER_PROPERTIES
 
 
@@ -47,8 +48,8 @@ def mock_backup_session(client_config: ClientConfiguration) -> MagicMock:
 
 @pytest.fixture()
 def mock_server(monkeypatch: pytest.MonkeyPatch, mock_local_db: MagicMock) -> TestClient:
-    importlib.reload(cache)
-    monkeypatch.setattr(config, 'LOCAL_DATABASE', mock_local_db)
+    importlib.reload(app)
+    monkeypatch.setattr(app, '_local_database', mock_local_db)
     result = TestClient(app.app, raise_server_exceptions=False)
     # The test client has a broken close() method
     TestClient.close = lambda _: None
@@ -56,8 +57,13 @@ def mock_server(monkeypatch: pytest.MonkeyPatch, mock_local_db: MagicMock) -> Te
 
 
 @pytest.fixture()
-def client(monkeypatch: pytest.MonkeyPatch, mock_server: TestClient) -> ClientSession:
+def client(client_config: ClientConfiguration, monkeypatch: pytest.MonkeyPatch,
+           mock_server: TestClient) -> ClientSession:
+    async def dummy_authorizer(_):
+        return security.SimpleAuthorization(client_config.client_id, set(), set())
+
     monkeypatch.setattr(requests, 'Session', lambda: mock_server)
+    monkeypatch.setattr(app, '_authorizer', dummy_authorizer)
     with BasicAuthClient(SERVER_PROPERTIES) as client:
         yield asyncio.get_event_loop().run_until_complete(ClientSession.create_session(client))
 

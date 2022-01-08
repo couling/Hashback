@@ -49,13 +49,19 @@ class ServerVersion(BaseModel):
     server_authors: Optional[List[str]]
 
 
+class Credentials(BaseModel):
+    auth_type: str
+    username: str
+    password: Optional[str]
+    token: Optional[str]
+
+
 class ServerProperties(BaseModel):
 
     scheme: str
     hostname: str
     port: int = DEFAULT_PORT
-    username: Optional[str] = None
-    password: Optional[str] = None
+    credentials: Optional[Credentials]
     path: str = "/"
 
     extended_params: Dict[str, str] = {}
@@ -66,11 +72,11 @@ class ServerProperties(BaseModel):
             netloc = self.hostname
         else:
             netloc = f"{self.hostname}:{self.port}"
-        if self.username is not None:
-            if self.password is None:
-                netloc = f"{urllib.parse.quote_plus(self.username)}@{netloc}"
-            else:
-                netloc = f"{urllib.parse.quote_plus(self.username)}:{urllib.parse.quote_plus(self.password)}@{netloc}"
+        if self.credentials is not None:
+            user = urllib.parse.quote_plus(self.credentials.username)
+            if self.credentials.password is not None:
+                user = f"{user}:{urllib.parse.quote_plus(self.credentials.password)}"
+            netloc = f"{user}@{netloc}"
         if self.extended_params:
             query = urllib.parse.urlencode(self.extended_params)
             return f"{self.scheme}://{netloc}/?{query}"

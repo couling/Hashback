@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, validator
 VERSION = "1.0"
 
 EMPTY_FILE = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-READ_SIZE = 1024**2
+READ_SIZE = (1024**2) * 10
 
 class FileType(enum.Enum):
 
@@ -379,8 +379,8 @@ class ServerSession(Protocol):
         """
 
     @abstractmethod
-    async def get_file(self, inode: Inode, target_path: Optional[Path] = None,
-                       restore_permissions: bool = False, restore_owner: bool = False) -> Optional[FileReader]:
+    async def get_file(self, inode: Inode, target_path: Optional[Path] = None, restore_permissions: bool = False,
+                       restore_owner: bool = False) -> Optional[FileReader]:
         """
         Reads a file.
         :param inode: The handle to the file
@@ -393,9 +393,18 @@ class ServerSession(Protocol):
             not None then None is returned.
         """
 
+    async def close(self):
+        """
+        Release any resources
+        """
+
 
 class RequestException(Exception):
     http_status = 400  # Not knowing the cause of this request exception we can only assume it was an internal error
+
+
+class AccessDeniedException(RequestException):
+    http_status = 403
 
 
 class NotFoundException(RequestException):
@@ -487,8 +496,7 @@ def _(content: str) -> str:
     return hash_content(content.encode("utf-8"))
 
 
-@hash_content.register
-async def _(content: FileReader):
+async def async_hash_content(content: FileReader):
     """
     Generate an sha256sum for the given content.  Yes this is absolutely part of the protocol!
     Either the server or client can hash the same file and the result MUST match on both sides or things will break.
@@ -496,7 +504,7 @@ async def _(content: FileReader):
     hash_object = hashlib.sha256()
     bytes_read = await content.read(READ_SIZE)
     while bytes_read:
-        hash_object.update(hash_object)
+        hash_object.update(bytes_read)
         bytes_read = await content.read(READ_SIZE)
     return hash_object.hexdigest()
 

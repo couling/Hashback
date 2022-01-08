@@ -11,7 +11,8 @@ from hashback.server import SERVER_VERSION
 
 def test_login(client: ClientSession, client_config: ClientConfiguration, mock_local_db):
     assert client.client_config == client_config
-    assert {'client_id_or_name': 'test_user'} in (call.kwargs for call in mock_local_db.open_client_session.mock_calls)
+    assert {'client_id_or_name': str(client_config.client_id)} in \
+           (call.kwargs for call in mock_local_db.open_client_session.mock_calls)
 
 
 def test_server_version(client: ClientSession):
