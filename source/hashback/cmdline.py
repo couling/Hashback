@@ -10,7 +10,7 @@ from pydantic import BaseSettings
 
 from .misc import run_then_cancel, register_clean_shutdown, setup_logging, SettingsConfig
 from .protocol import ServerSession, DuplicateBackup
-from .scanner import Scanner
+from .backup_algorithm import BackupController
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +54,9 @@ def backup(timestamp: datetime, description: Optional[str], fast_unsafe: bool, o
             raise click.ClickException(f"Duplicate backup {exc}") from None
 
         logger.info(f"Backup - {backup_session.config.backup_date}")
-        backup_scanner = Scanner(backup_session)
+        backup_scanner = BackupController(backup_session)
         try:
-            await backup_scanner.scan_all(fast_unsafe=fast_unsafe)
+            await backup_scanner.backup_all(fast_unsafe=fast_unsafe)
             logger.info("Finalizing backup")
             await backup_session.complete()
             logger.info("All done")

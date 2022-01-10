@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel
 
 from . import protocol
-from .file_reader import AsyncFile, async_stat
+from .local_file_system import AsyncFile, async_stat
 from .protocol import Inode, Directory, Backup, BackupSessionConfig
 
 _CONFIG_FILE = 'config.json'

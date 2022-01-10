@@ -7,7 +7,7 @@ from typing import Optional
 import click
 import dateutil.tz
 
-from . import protocol, scanner
+from . import protocol, backup_algorithm
 from .local_database import LocalDatabase, Configuration
 from .misc import run_then_cancel, str_exception, setup_logging, register_clean_shutdown
 
@@ -216,7 +216,7 @@ def offset_base_path(scan_spec: protocol.ClientConfiguredBackupDirectory,
     )
 
 
-class BackupMigrationScanner(scanner.Scanner):
+class BackupMigrationScanner(backup_algorithm.BackupController):
 
     def __init__(self, backup_session: protocol.BackupSession, hardlinks: bool):
         super().__init__(backup_session)
@@ -224,7 +224,7 @@ class BackupMigrationScanner(scanner.Scanner):
 
     async def _upload_missing_file(self, path: Path, directory: protocol.Directory, missing_file: str):
         if not self.hardlinks:
-            await super()._upload_missing_file(path, directory, missing_file)
+            await super()._upload_file(path, directory, missing_file)
             return
         inode = directory.children[missing_file]
         if inode.type == protocol.FileType.REGULAR:
@@ -240,7 +240,7 @@ class BackupMigrationScanner(scanner.Scanner):
                 return
             except OSError as exc:
                 logger.error(f"Failed to create hardlink ({exc}) falling back to copying")
-                await super()._upload_missing_file(path, directory, missing_file)
+                await super()._upload_file(path, directory, missing_file)
 
 
 if __name__ == '__main__':

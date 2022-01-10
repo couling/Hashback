@@ -6,7 +6,7 @@ import stat
 from abc import abstractmethod
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Protocol, Dict, Optional, Union, List, NamedTuple, Tuple
+from typing import Protocol, Dict, Optional, Union, List, NamedTuple, Tuple, Iterator
 from uuid import UUID, uuid4
 
 import aiofiles.os
@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field, validator
 
 # This will either get bumped, or the file will be duplicated and each one will have a VERSION.  In any case this file
 # specifies protocol version ...
+from hashback.local_file_system import AsyncFile
+
 VERSION = "1.0"
 
 EMPTY_FILE = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -170,6 +172,7 @@ class DirectoryDefResponse(BaseModel):
 class FilterType(enum.Enum):
     INCLUDE = 'include'
     EXCLUDE = 'exclude'
+    PATTERN_EXCLUDE = 'pattern'
 
 
 class Filter(BaseModel):
@@ -396,6 +399,47 @@ class ServerSession(Protocol):
     async def close(self):
         """
         Release any resources
+        """
+
+
+class DirectoryExplorer(Protocol):
+
+    @abstractmethod
+    async def iter_children(self) -> Iterator[Tuple[str, Inode]]:
+        """
+        Gets an iterator over all the children in the directory.  Child inodes will be populated from an internal
+        cache if possible, so if the same file is seen twice via different names (hard-linked) then it will return
+        the same Inode object.  This is useful as it will mean previous calls to hash the file will populate the inodes
+        hash.
+
+        Otherwise expect the hash field in most files to be none to begin with.
+        """
+
+    @abstractmethod
+    async def inode(self) -> Inode:
+        """
+        This is typically only used to get the inode for a directory root.  It fetches the inode for the base directory.
+        """
+
+    @abstractmethod
+    async def open_child(self, name: str, mode: str) -> FileReader:
+        """
+        Opens a file for async reading or writing.
+        :param name: The name of the child to open.
+        """
+
+    @abstractmethod
+    def get_child(self, name: str) -> "DirectoryExplorer":
+        """
+        Gets a child DirectoryExplorer connected to a child directory.  This will not verify that the child is a
+        directory or even that it exists, so care must be taken on the part of the caller to ensure the name was
+        previously yielded by iter_children()
+        """
+
+    def get_path(self, name: Optional[str]) -> str:
+        """
+        Gets a human readable name for a particular child or the parent directory
+        :param name: The name of the child or None for the parent
         """
 
 
