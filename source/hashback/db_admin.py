@@ -8,7 +8,8 @@ import click
 import dateutil.tz
 
 from . import protocol, backup_algorithm
-from .local_database import LocalDatabase, Configuration
+from .local_database import LocalDatabase, Configuration, LocalDatabaseBackupSession
+from .local_file_system import LocalFileSystemExplorer
 from .misc import run_then_cancel, str_exception, setup_logging, register_clean_shutdown
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ def add_client(database: LocalDatabase, client_name: str):
 @click.option('--include', type=click.Path(path_type=Path), multiple=True)
 @click.option('--exclude', type=click.Path(path_type=Path), multiple=True)
 @click.pass_obj
-def add_directory(database: LocalDatabase, client_name: str, root_name: str, root_path: Path, **options):
+def add_root(database: LocalDatabase, client_name: str, root_name: str, root_path: Path, **options):
     def normalize(path: Path) -> str:
         if path.is_absolute():
             return str(path.relative_to(root_path))
@@ -89,13 +90,13 @@ def add_directory(database: LocalDatabase, client_name: str, root_name: str, roo
 @click.argument('CLIENT_NAME', envvar="CLIENT_NAME")
 @click.argument('BASE_PATH', type=click.Path(path_type=Path, exists=True, file_okay=False))
 @click.option("--timestamp", type=click.DateTime(formats=['%Y-%m-%d', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']))
-@click.option("--infer-timestamp/--no-infer-timestamp", default=False)
+@click.option("--batch/--single", default=False)
 @click.option("--description")
 @click.option("--accept-warning/--no-accept-warning", default=False)
 @click.option("--hardlinks/--no-hardlinks", default=False)
-@click.option("--fast-unsafe/-safe", default=False)
+@click.option("--full-prescan/--no-full-prescan", default=True)
 @click.pass_obj
-def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, timestamp: datetime,
+def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, timestamp: Optional[datetime],
                    description: Optional[str], **options: bool):
     server_session = database.open_client_session(client_id_or_name=client_name)
     base_path = base_path.absolute()
@@ -104,7 +105,10 @@ def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, 
         _warn_migrate_backup(base_path, server_session, **options)
         return
 
-    if options['infer_timestamp']:
+    # The local filesystem explorer caches the inodes and indexs them by st_dev, st_ino meaning that when hardlinks
+    # of the same file are encountered, there's no need to rescan
+    explorer = LocalFileSystemExplorer()
+    if options['batch']:
         for directory in base_path.iterdir():
             timestamp = datetime.fromisoformat(directory.name)
             if timestamp.tzinfo:
@@ -114,8 +118,8 @@ def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, 
                 base_path=directory,
                 timestamp=timestamp,
                 description=description,
-                hardlinks=options['hardlinks'],
-                fast_unsafe=options['fast_unsafe'],
+                explorer=explorer,
+                **options,
             )
     else:
         if timestamp.tzinfo is None:
@@ -125,8 +129,8 @@ def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, 
             base_path=base_path,
             timestamp=timestamp,
             description=description,
-            hardlinks=options['hardlinks'],
-            fast_unsafe=options['fast_unsafe'],
+            explorer=explorer,
+            **options,
         )
 
 
@@ -136,11 +140,11 @@ def _warn_migrate_backup(base_path: Path, server_session: protocol.ServerSession
         warning_message += (
             "--hardlinks ... Changing the migrated files after migration WILL CORRUPT YOUR BACKUP DATABASE. "
             "  Hardlinks are fast but hardlinks are DANGEROUS.\n"
-            "To avoid corruption you are advised either to use --no-hardlinks (creating a copy) or consider "
-            "deleting the original after migration.\n\n"
+            "To avoid corruption you are advised either to use --no-hardlinks (creating a copy) or "
+            "delete the original after migration.\n\n"
         )
 
-    if options['infer_timestamp']:
+    if options['batch']:
         try:
             timestamps = ', '.join(sorted(datetime.fromisoformat(path.name).isoformat()
                                           for path in base_path.iterdir()))
@@ -153,7 +157,7 @@ def _warn_migrate_backup(base_path: Path, server_session: protocol.ServerSession
             timestamps = f"Unable to determine list because of error: {str_exception(exc)}"
 
         warning_message += (
-            "--infer-timestamp will use an iso formatted timestamp or date in the file path to infer multiple "
+            "--batch will use an iso formatted timestamp or date in the file path to infer multiple "
             "backup dates.  The full list of backups migrated will be:\n"
         )
         warning_message += timestamps
@@ -162,7 +166,7 @@ def _warn_migrate_backup(base_path: Path, server_session: protocol.ServerSession
     warning_message += "You have configured the following directories to be migrated:\n"
 
     for directory in server_session.client_config.backup_directories.values():
-        if options['infer_timestamp']:
+        if options['batch']:
             warning_message += f"{base_path / '<timestamp>' / Path(*Path(directory.base_path).parts[1:])}\n"
         else:
             warning_message += f"{base_path / Path(*Path(directory.base_path).parts[1:])}\n"
@@ -180,22 +184,34 @@ def _warn_migrate_backup(base_path: Path, server_session: protocol.ServerSession
 
 
 def migrate_single_backup(server_session: protocol.ServerSession, base_path: Path, timestamp: datetime,
-                          description: str, **options: bool):
+                          description: str, explorer: protocol.DirectoryExplorer, **options: bool):
     async def _backup():
         backup_session = await server_session.start_backup(
             backup_date=timestamp,
             description=description,
         )
+        logger.info(f"Started Backup Session {backup_session.config.session_id} for ckuebt")
 
-        logger.info(f"Migrating Backup - {backup_session.config.backup_date}")
-        backup_directories = {name: offset_base_path(value, base_path)
-                              for name, value in server_session.client_config.backup_directories.items()}
-        backup_scanner = BackupMigrationScanner(backup_session, options['hardlinks'])
         try:
-            await backup_scanner.scan_all(backup_directories, fast_unsafe=options['fast_unsafe'])
-            logger.info("Finalizing backup")
-            await backup_session.complete()
-            logger.info("%s done", timestamp.isoformat())
+            logger.info(f"Migrating Backup - {backup_session.config.backup_date}")
+
+            backup_controller = BackupMigrationController(
+                file_system_explorer=explorer,
+                backup_session=backup_session,
+                hardlinks=options.get('hardlinks', False),
+            )
+            # This is one context where the full prescan might be a lot faster. Use it by default.
+            backup_controller.full_prescan = options.get('full_prescan', True)
+            backup_controller.read_last_backup = False
+            backup_controller.match_meta_only = False
+
+            for root_name, scan_spec in backup_session.server_session.client_config.backup_directories.items():
+                await backup_controller.backup_root(
+                    root_name=root_name,
+                    scan_spec=offset_base_path(new_base_path=base_path, scan_spec=scan_spec)
+                )
+                await backup_session.complete()
+                logger.info("%s done", timestamp.isoformat())
         except (Exception, asyncio.CancelledError) as exc:
             logger.info("Discarding session due to error (%s)", str_exception(exc))
             await backup_session.discard()
@@ -216,31 +232,33 @@ def offset_base_path(scan_spec: protocol.ClientConfiguredBackupDirectory,
     )
 
 
-class BackupMigrationScanner(backup_algorithm.BackupController):
+class BackupMigrationController(backup_algorithm.BackupController):
 
-    def __init__(self, backup_session: protocol.BackupSession, hardlinks: bool):
-        super().__init__(backup_session)
+    backup_session: LocalDatabaseBackupSession
+
+    def __init__(self, *args, hardlinks: bool, **kwargs):
+        super().__init__(*args, **kwargs)
         self.hardlinks = hardlinks
 
-    async def _upload_missing_file(self, path: Path, directory: protocol.Directory, missing_file: str):
-        if not self.hardlinks:
-            await super()._upload_file(path, directory, missing_file)
+    async def _upload_file(self, explorer: protocol.DirectoryExplorer, directory: protocol.Directory, child_name: str):
+
+        inode = directory.children[child_name]
+
+        if not self.hardlinks or inode.type is not protocol.FileType.REGULAR:
+            return await super()._upload_file(explorer, directory, child_name)
+
+        # This is really cheating, we assume this is a local database session and use a protected field to add the
+        # file as a hardlink to the original instead of the super() version which would copy it.
+        # pylint: disable=protected-access
+        target_path = self.backup_session._new_object_path_for(inode.hash)
+        try:
+            source_path = Path(explorer.get_path(child_name))
+            logger.info(f"Creating hardlink '{source_path}' → '{target_path}'")
+            source_path.link_to(target_path)
             return
-        inode = directory.children[missing_file]
-        if inode.type == protocol.FileType.REGULAR:
-            # This is really cheating, we assume this is a local database session and use a protected field to add the
-            # file as a hardlink to the original
-            # TODO add a hardlink option or method to local database.  This is likely to be useful elsewhere
-            # pylint: disable=protected-access
-            target_path = self.backup_session._new_object_path_for(inode.hash)
-            try:
-                source_path = path / missing_file
-                logger.info(f"Creating hardlink '{source_path}' → '{target_path}'")
-                source_path.link_to(target_path)
-                return
-            except OSError as exc:
-                logger.error(f"Failed to create hardlink ({exc}) falling back to copying")
-                await super()._upload_file(path, directory, missing_file)
+        except OSError as exc:
+            logger.error(f"Failed to create hardlink ({exc}) falling back to copying")
+            return await super()._upload_file(explorer, directory, child_name)
 
 
 if __name__ == '__main__':

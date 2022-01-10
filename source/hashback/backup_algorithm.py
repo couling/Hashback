@@ -26,13 +26,11 @@ class BackupController:
         self.match_meta_only = True
         self.full_prescan = False
 
-    async def backup_all(self, backup_roots: Optional[Dict[str, protocol.ClientConfiguredBackupDirectory]] = None):
+    async def backup_all(self):
         """
         Scan all directories.
-        :param backup_roots: The directories to backup.  If not, this will be pulled from the client's server.
         """
-        if backup_roots is None:
-            backup_roots = self.backup_session.server_session.client_config.backup_directories
+        backup_roots = self.backup_session.server_session.client_config.backup_directories
 
         # Scans are internally parallelized.  Let's not gather() this one so we have some opportunity to understand
         # what it was doing if it failed.
@@ -40,14 +38,9 @@ class BackupController:
             last_backup = await self.backup_session.server_session.get_backup()
             if last_backup is None:
                 logger.warning("No previous backup found. This scan will slow-safe not fast-unsafe")
-                last_backup_roots = {}
             else:
-                last_backup_roots = last_backup.roots
-                logger.warning("Comparing meta data to last backup, will not check content for existing files.")
+                logger.info("Comparing meta data to last backup, will not check content for existing files.")
             for name, scan_spec in backup_roots.items():
-                last_backup = last_backup_roots.get(name)
-                if last_backup is None:
-                    logger.warning(f"Directory '{name}' not in last backup")
                 await self.backup_root(root_name=name, scan_spec=scan_spec, last_backup=last_backup)
         else:
             logger.info("Ignoring last backup, will hash every file")
@@ -55,14 +48,22 @@ class BackupController:
                 await self.backup_root(root_name=name, scan_spec=scan_spec)
 
     async def backup_root(self, root_name: str, scan_spec: protocol.ClientConfiguredBackupDirectory,
-                          last_backup: Optional[protocol.Inode] = None):
+                          last_backup: Optional[protocol.Backup] = None):
 
         logger.info(f"Backing up '{root_name}' ({scan_spec.base_path})")
+        if last_backup is not None:
+            last_backup_root = last_backup.roots.get(root_name) if last_backup is not None else None
+            if last_backup_root is None:
+                logger.warning(f"Root '{root_name}' not in last backup")
+        else:
+            last_backup_root = None
+
         explorer = self.file_system_explorer(scan_spec)
-        root_hash = await self._backup_directory(explorer, last_backup)
+        root_hash = await self._backup_directory(explorer, last_backup_root)
         root_inode = await explorer.inode()
         root_inode.hash = root_hash
         await self.backup_session.add_root_dir(root_name, root_inode)
+        logger.info(f"Done backing up '{root_name}'")
 
     async def _backup_directory(self, explorer: protocol.DirectoryExplorer,
                                 last_backup: Optional[protocol.Inode]) -> str:
@@ -181,8 +182,7 @@ class BackupController:
         logger.debug(f"Server accepted directory {explorer.get_path(None)} as {server_response.ref_hash}")
         return server_response.ref_hash
 
-    async def _upload_file(self, explorer: protocol.DirectoryExplorer, directory: protocol.Directory,
-                           child_name: str):
+    async def _upload_file(self, explorer: protocol.DirectoryExplorer, directory: protocol.Directory, child_name: str):
         """
         Upload a file after the server has stated it does not already have a copy.
         """

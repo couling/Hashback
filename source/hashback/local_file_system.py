@@ -31,9 +31,11 @@ class AsyncFile(protocol.FileReader):
     _buffer: bytes = bytes()
     _offset: int = 0
     _size: int
+    file_path: Path
 
     def __init__(self, file_path: Path, mode: str, executor = None, **kwargs):
         super().__init__()
+        self.file_path = file_path
         self._executor = executor
         self._file = file_path.open(mode + "b", buffering=False, **kwargs)
         try:
