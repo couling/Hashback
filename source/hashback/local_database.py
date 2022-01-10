@@ -241,8 +241,8 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
 
         directory_hash, content = definition.hash()
         if self._object_exists(directory_hash + self._server_session._DIR_SUFFIX):
-            # An empty response here means "success".
-            return protocol.DirectoryDefResponse()
+            logger.debug(f"Directory def already exists {directory_hash}")
+            return protocol.DirectoryDefResponse(ref_hash=directory_hash)
 
         missing = []
         for name, inode in definition.children.items():

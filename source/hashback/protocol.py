@@ -6,7 +6,7 @@ import stat
 from abc import abstractmethod
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Protocol, Dict, Optional, Union, List, NamedTuple, Tuple, Iterator
+from typing import AsyncIterable, Dict, List, NamedTuple, Optional, Protocol, Tuple, Union
 from uuid import UUID, uuid4
 
 import aiofiles.os
@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field, validator
 
 # This will either get bumped, or the file will be duplicated and each one will have a VERSION.  In any case this file
 # specifies protocol version ...
-from hashback.local_file_system import AsyncFile
 
 VERSION = "1.0"
 
@@ -172,7 +171,7 @@ class DirectoryDefResponse(BaseModel):
 class FilterType(enum.Enum):
     INCLUDE = 'include'
     EXCLUDE = 'exclude'
-    PATTERN_EXCLUDE = 'pattern'
+    PATTERN_EXCLUDE = 'exclude-pattern'
 
 
 class Filter(BaseModel):
@@ -405,7 +404,7 @@ class ServerSession(Protocol):
 class DirectoryExplorer(Protocol):
 
     @abstractmethod
-    async def iter_children(self) -> Iterator[Tuple[str, Inode]]:
+    def iter_children(self) -> AsyncIterable[Tuple[str, Inode]]:
         """
         Gets an iterator over all the children in the directory.  Child inodes will be populated from an internal
         cache if possible, so if the same file is seen twice via different names (hard-linked) then it will return

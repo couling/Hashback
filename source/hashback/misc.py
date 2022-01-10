@@ -1,14 +1,13 @@
 import asyncio
 import collections.abc
+import functools
 import json
 import logging
 import os
 import signal
-import functools
-from pathlib import Path
 from copy import deepcopy
-from typing import Union, Optional, Coroutine, Collection, Dict, Any
-
+from pathlib import Path
+from typing import Any, Collection, Coroutine, Dict, Optional, Union
 
 logger = logging.getLogger(__name__)
 

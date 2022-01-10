@@ -305,7 +305,7 @@ class TestPassThroughBackupSession(BaseTestPassThrough):
             backup_date=datetime.now(timezone.utc),
             started=datetime.now(timezone.utc) - timedelta(hours=1),
             completed=datetime.now(timezone.utc),
-            roots=EXAMPLE_DIR.children,
+            roots=EXAMPLE_DIR.definition,
             description='Example backup',
         )
         self._run_and_check_pass_through(self.client_session.complete(), return_value=result)

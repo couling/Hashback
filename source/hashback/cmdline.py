@@ -11,6 +11,7 @@ from pydantic import BaseSettings
 from .misc import run_then_cancel, register_clean_shutdown, setup_logging, SettingsConfig
 from .protocol import ServerSession, DuplicateBackup
 from .backup_algorithm import BackupController
+from .local_file_system import LocalFileSystemExplorer
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ def click_main(config_path: Path):
 @click.option("--description")
 @click.option("--overwrite/--no-overwrite", default=False)
 @click.option("--fast-unsafe/--slow-safe", default=True)
-def backup(timestamp: datetime, description: Optional[str], fast_unsafe: bool, overwrite: bool):
+@click.option("--full-prescan/--low-mem", default=False)
+def backup(timestamp: datetime, description: Optional[str], fast_unsafe: bool, full_prescan: bool, overwrite: bool):
     server_session: ServerSession = click.get_current_context().obj
     if timestamp is None:
         timestamp = datetime.now(dateutil.tz.gettz())
@@ -54,9 +56,14 @@ def backup(timestamp: datetime, description: Optional[str], fast_unsafe: bool, o
             raise click.ClickException(f"Duplicate backup {exc}") from None
 
         logger.info(f"Backup - {backup_session.config.backup_date}")
-        backup_scanner = BackupController(backup_session)
+        backup_scanner = BackupController(LocalFileSystemExplorer(), backup_session)
+
+        backup_scanner.read_last_backup = fast_unsafe
+        backup_scanner.match_meta_only = fast_unsafe
+        backup_scanner.full_prescan = full_prescan
+
         try:
-            await backup_scanner.backup_all(fast_unsafe=fast_unsafe)
+            await backup_scanner.backup_all()
             logger.info("Finalizing backup")
             await backup_session.complete()
             logger.info("All done")

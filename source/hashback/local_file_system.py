@@ -1,14 +1,17 @@
 import asyncio
+import io
 import logging
 import os
-import io
-from concurrent.futures import ThreadPoolExecutor, Executor
-from datetime import datetime, MINYEAR
-from pathlib import Path
-from typing import BinaryIO, List, Dict, Tuple, Iterator, Optional
+from concurrent.futures import Executor, ThreadPoolExecutor
+from datetime import MINYEAR, datetime
 from fnmatch import fnmatch
+from pathlib import Path
+from typing import BinaryIO, Dict, AsyncIterable, List, Optional, Tuple
 
-from . import protocol, file_filter
+from . import file_filter, protocol
+
+
+logger = logging.getLogger(__name__)
 
 # pylint: disable=invalid-name
 default_executor: Optional[Executor] = None
@@ -140,10 +143,10 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         self._filter_node = filter_node
         self._children = {}
 
-    async def iter_children(self) -> Iterator[Tuple[str, protocol.Inode]]:
+    async def iter_children(self) -> AsyncIterable[Tuple[str, protocol.Inode]]:
         if self._filter_node is not None and self._filter_node.filter_type is protocol.FilterType.EXCLUDE:
             # This LocalDirectoryExplorer has been created for an excluded directory, but there may be exceptions.
-            logging.debug("Excluded %s has %s exceptions", self._base_path, len(self._filter_node.exceptions))
+            logger.debug("Excluded %s has %s exceptions", self._base_path, len(self._filter_node.exceptions))
             for child_name, exception in self._filter_node.exceptions.items():
                 child = self._base_path / child_name
                 if exception.filter_type is protocol.FilterType.INCLUDE:
@@ -154,7 +157,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                     # Looks like there is a child of the child that's the real exception.
                     yield child_name, self._EXCLUDED_DIR_INODE.copy()
                 else:
-                    logging.warning("Something was included inside %s has been included, but it could not be backed up",
+                    logger.warning("Something was included inside %s has been included, but it could not be backed up",
                                     child)
                     yield child_name, self._EXCLUDED_DIR_INODE.copy()
 
@@ -167,10 +170,10 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                     # If this child is explicitly excluded ...
                     exception_count = len(self._filter_node.exceptions[child_name].exceptions)
                     if exception_count:
-                        logging.debug("Skipping %s on filter with %s exceptions", child, exception_count)
+                        logger.debug("Skipping %s on filter with %s exceptions", child, exception_count)
                         yield child_name, self._EXCLUDED_DIR_INODE.copy()
                     else:
-                        logging.debug("Skipping %s on filter", child)
+                        logger.debug("Skipping %s on filter", child)
                     continue
 
                 if self._should_pattern_ignore(child):
@@ -179,14 +182,15 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                 yield child.name, self._stat_child(child_name)
 
         else:
-            raise ValueError(f"Normalized filter node had filter type of %s which is incorrect",
-                             self._filter_node.filter_type)
+            raise ValueError(f"Normalized filter node had type {self._filter_node.filter_type}.  "
+                             f"This should have been one either {protocol.FilterType.INCLUDE} or"
+                             f"{protocol.FilterType.EXCLUDE}")
 
     def _should_pattern_ignore(self, child: Path) -> bool:
         child_name = child.name
         for pattern in self._ignore_patterns:
             if fnmatch(child_name, pattern):
-                logging.debug("Skipping %s on pattern %s", child, pattern)
+                logger.debug("Skipping %s on pattern %s", child, pattern)
                 return True
         return False
 

@@ -1,15 +1,17 @@
 import logging
-import os
 from asyncio import gather
-from pathlib import Path
-from typing import Dict
-from typing import Optional, Callable
+from typing import Callable, Dict, NamedTuple, Optional
 from uuid import uuid4
 
 from . import protocol
 from .misc import str_exception
 
 logger = logging.getLogger(__name__)
+
+
+class ScanResult(NamedTuple):
+    definition: protocol.Directory
+    child_scan_results: Optional[Dict[str, "ScanResult"]]
 
 
 class BackupController:
@@ -22,14 +24,12 @@ class BackupController:
         self.file_system_explorer = file_system_explorer
         self.read_last_backup = True
         self.match_meta_only = True
+        self.full_prescan = False
 
     async def backup_all(self, backup_roots: Optional[Dict[str, protocol.ClientConfiguredBackupDirectory]] = None):
         """
         Scan all directories.
         :param backup_roots: The directories to backup.  If not, this will be pulled from the client's server.
-        :param fast_unsafe: Compare meta-data to the previous backup stored on the same server.  This can be much faster
-            But it is "unsafe" because it does not check the file content.  Theoretically content can change without
-            changing the timestamp or size.  It's rare, but it could theoretically happen.
         """
         if backup_roots is None:
             backup_roots = self.backup_session.server_session.client_config.backup_directories
@@ -48,14 +48,14 @@ class BackupController:
                 last_backup = last_backup_roots.get(name)
                 if last_backup is None:
                     logger.warning(f"Directory '{name}' not in last backup")
-                await self.backup_root(root_name=name, scan_spec=scan_spec, last_backup=last_backup.hash)
+                await self.backup_root(root_name=name, scan_spec=scan_spec, last_backup=last_backup)
         else:
             logger.info("Ignoring last backup, will hash every file")
             for name, scan_spec in backup_roots.items():
                 await self.backup_root(root_name=name, scan_spec=scan_spec)
 
     async def backup_root(self, root_name: str, scan_spec: protocol.ClientConfiguredBackupDirectory,
-                          last_backup: Optional[str] = None):
+                          last_backup: Optional[protocol.Inode] = None):
 
         logger.info(f"Backing up '{root_name}' ({scan_spec.base_path})")
         explorer = self.file_system_explorer(scan_spec)
@@ -72,7 +72,7 @@ class BackupController:
         :param last_backup: The last backup definition if available.
         """
         directory_definition = await self._scan_directory(explorer, last_backup)
-        if last_backup is None or last_backup.hash != directory_definition.hash():
+        if last_backup is None or last_backup.hash != directory_definition.definition.hash():
             return await self._upload_directory(explorer, directory_definition)
         else:
             logger.debug(f"Skipping %s directory not changed", explorer.get_path(None))
@@ -80,20 +80,36 @@ class BackupController:
 
 
     async def _scan_directory(self, explorer: protocol.DirectoryExplorer,
-                              last_backup: Optional[protocol.Inode]) -> protocol.Directory:
+                              last_backup: Optional[protocol.Inode]
+                              ) -> ScanResult:
 
         if self.read_last_backup and last_backup is not None:
-            last_backup_children = await self.backup_session.server_session.get_directory(last_backup)
+            last_backup_children = (await self.backup_session.server_session.get_directory(last_backup)).children
         else:
             last_backup_children = {}
 
         children = {}
-        for child_name, child_inode in await explorer.iter_children():
+        child_directories = {} if self.full_prescan else None
+        async for child_name, child_inode in explorer.iter_children():
             if child_inode.type is protocol.FileType.DIRECTORY:
-                child_inode.hash = await self._backup_directory(
-                    explorer.get_child(child_name),
-                    last_backup_children.get(child_name),
-                )
+                # Two major modes of operation which change the pattern of how this code recurses through directories.
+                if self.full_prescan:
+                    # ... Either we scan the entire tree and then try to upload that scan in a separate step
+                    # To do this _scan_directory calls _scan_directory to build a tree of ScanResult objects.
+                    child_scan = await self._scan_directory(
+                        explorer.get_child(child_name),
+                        last_backup_children.get(child_name),
+                    )
+                    child_inode.hash, _ = child_scan.definition.hash()
+                    child_directories[child_name] = child_scan
+                else:
+                    # ... Or we backup one directory at a time.  Scanning and uploading as we go.
+                    # To do this, _scan_directory calls _backup_directory to ensure children are fully backed up
+                    # before backing up the parent... There is no need to store a tree of ScanResult objects.
+                    child_inode.hash = await self._backup_directory(
+                        explorer.get_child(child_name),
+                        last_backup_children.get(child_name),
+                    )
 
             else:
                 if (child_inode.hash is None and self.match_meta_only and last_backup is not None
@@ -114,10 +130,13 @@ class BackupController:
 
             children[child_name] = child_inode
 
-        return protocol.Directory(__root__=children)
+        return ScanResult(
+            definition=protocol.Directory(__root__=children),
+            child_scan_results=child_directories,
+        )
 
 
-    async def _upload_directory(self, explorer: protocol.DirectoryExplorer, directory: protocol.Directory) -> str:
+    async def _upload_directory(self, explorer: protocol.DirectoryExplorer, directory: ScanResult) -> str:
         """
         Uploads a directory to the server.
 
@@ -127,20 +146,36 @@ class BackupController:
         """
         logger.debug(f"Uploading directory {explorer}")
         # The directory has changed.  We send the contents over to the server. It will tell us what else it needs.
-        server_response = await self.backup_session.directory_def(directory)
+        server_response = await self.backup_session.directory_def(directory.definition)
+
         if not server_response.success:
+            upload_tasks = []
+
             logger.debug(f"{len(server_response.missing_files)} missing files in {explorer}")
-            await gather(*(self._upload_file(explorer, directory, missing_file)
-                           for missing_file in server_response.missing_files))
+            for missing_file in server_response.missing_files:
+                if directory.definition.children[missing_file].type is protocol.FileType.DIRECTORY:
+                    if not self.full_prescan:
+                        # We should only need to recurse through directories if we are in full_prescan mode
+                        # Otherwise _backup_directory should already have uploaded the children.
+                        raise RuntimeError(f"Somehow the server does not have a copy of directory "
+                                           f"{explorer.get_path(missing_file)}.  It should have been uploaded already!")
+                    await self._upload_directory(
+                        explorer=explorer.get_child(missing_file),
+                        directory=directory.child_scan_results[missing_file],
+                    )
+                else:
+                    upload_tasks.append(self._upload_file(explorer, directory.definition, missing_file))
+
+            await gather(*upload_tasks)
             # Retry the directory now that all files have been uploaded.
             # We let the server know this replaces the previous request.  Some servers may place a marker on the session
             # preventing us from completing until unsuccessful requests have been replaced.
-            server_response = await self.backup_session.directory_def(directory, replaces=server_response.missing_ref)
+            server_response = await self.backup_session.directory_def(directory.definition, replaces=server_response.missing_ref)
             if not server_response.success:
                 raise protocol.ProtocolError(
                     "Files disappeared server-side while backup is in progress.  "
                     "This must not happen or the backup will be corrupted. "
-                    f"{ {name: directory.children.get(name) for name in server_response.missing_files} }",
+                    f"{ {name: directory.definition.children.get(name) for name in server_response.missing_files} }",
                 )
 
         logger.debug(f"Server accepted directory {explorer.get_path(None)} as {server_response.ref_hash}")
@@ -170,5 +205,5 @@ class BackupController:
             logger.error(f"File disappeared before it could be uploaded: {file_path}")
             del directory.children[child_name]
         except OSError as exc:
-            logger.error(f"Cannot upload: {file_path} - {str_exception(exc)}", exc_info=True)
+            logger.error(f"Cannot read file to upload: {file_path} - {str_exception(exc)}")
             del directory.children[child_name]
