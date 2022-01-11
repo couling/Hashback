@@ -521,12 +521,15 @@ def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta, 
     return datetime.fromtimestamp(timestamp, client_timezone)
 
 
+HashType = hashlib.sha256
+
+
 @functools.singledispatch
 def hash_content(content: bytes) -> str:
     """
     Generate an sha256sum for the given content.
     """
-    hash_object = hashlib.sha256()
+    hash_object = HashType()
     hash_object.update(content)
     return hash_object.hexdigest()
 
@@ -544,7 +547,7 @@ async def async_hash_content(content: FileReader):
     Generate an sha256sum for the given content.  Yes this is absolutely part of the protocol!
     Either the server or client can hash the same file and the result MUST match on both sides or things will break.
     """
-    hash_object = hashlib.sha256()
+    hash_object = HashType()
     bytes_read = await content.read(READ_SIZE)
     while bytes_read:
         hash_object.update(bytes_read)
