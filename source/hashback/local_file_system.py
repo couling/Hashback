@@ -34,7 +34,6 @@ class AsyncFile(protocol.FileReader):
     file_path: Path
 
     def __init__(self, file_path: Path, mode: str, executor = None, **kwargs):
-        super().__init__()
         self.file_path = file_path
         self._executor = executor
         self._file = file_path.open(mode + "b", buffering=False, **kwargs)
@@ -153,7 +152,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                 child = self._base_path / child_name
                 if exception.filter_type is protocol.FilterType.INCLUDE:
                     # Exception to include this child.
-                    if not self._should_pattern_ignore(child):
+                    if not self._should_pattern_ignore(child) and child.exists():
                         yield child_name, self._stat_child(child_name)
                 elif child.is_dir():
                     # Looks like there is a child of the child that's the real exception.
@@ -166,6 +165,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         elif self._filter_node is None or self._filter_node.filter_type is protocol.FilterType.INCLUDE:
             for child in self._base_path.iterdir():
                 child_name = child.name
+
 
                 if self._filter_node is not None and child_name in self._filter_node.exceptions and \
                         self._filter_node.exceptions[child_name].filter_type is protocol.FilterType.EXCLUDE:
@@ -181,7 +181,11 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                 if self._should_pattern_ignore(child):
                     continue
 
-                yield child.name, self._stat_child(child_name)
+                inode = self._stat_child(child_name)
+                if inode.type not in self._INCLUDED_FILE_TYPES:
+                    continue
+
+                yield child.name, inode
 
         else:
             raise ValueError(f"Normalized filter node had type {self._filter_node.filter_type}.  "
@@ -201,7 +205,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         inode = self._children.get(child)
         if inode is not None:
             return inode
-        file_stat = file_path.stat()
+        file_stat = file_path.lstat()
         inode = self._all_files.get((file_stat.st_dev, file_stat.st_ino))
         if inode is None:
             inode = protocol.Inode.from_stat(file_stat, None)
@@ -217,7 +221,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         if self._filter_node is not None and self._filter_node.filter_type is protocol.FilterType.EXCLUDE:
             return self._EXCLUDED_DIR_INODE.copy()
 
-        stat = self._base_path.stat()
+        stat = self._base_path.lstat()
         inode = protocol.Inode.from_stat(stat, hash_value=None)
         self._all_files[(stat.st_dev, stat.st_ino)] = inode
         return inode
@@ -234,6 +238,8 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
 
         elif child_type == protocol.FileType.PIPE:
             return BytesReader(bytes(0))
+
+        raise ValueError(f"Cannot open child of type {child_type}")
 
     def get_child(self, name: str) -> protocol.DirectoryExplorer:
         return type(self)(

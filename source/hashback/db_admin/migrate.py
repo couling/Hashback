@@ -42,7 +42,9 @@ def migrate_backup(database: LocalDatabase,  client_name: str, base_path: Path, 
         for directory in base_path.iterdir():
             timestamp = datetime.fromisoformat(directory.name)
             if timestamp.tzinfo:
-                timestamp.astimezone(dateutil.tz.gettz())
+                timestamp = timestamp.astimezone(dateutil.tz.gettz())
+            else:
+                timestamp = timestamp.replace(tzinfo=dateutil.tz.gettz())
             migrate_single_backup(
                 server_session=server_session,
                 base_path=directory,
@@ -122,7 +124,7 @@ def migrate_single_backup(server_session: protocol.ServerSession, base_path: Pat
             backup_date=timestamp,
             description=description,
         )
-        logger.info(f"Started Backup Session {backup_session.config.session_id} for ckuebt")
+        logger.info(f"Started Backup Session {backup_session.config.session_id}")
 
         try:
             logger.info(f"Migrating Backup - {backup_session.config.backup_date}")

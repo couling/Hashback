@@ -52,6 +52,8 @@ class Check:
             logger.warning(f"Found {len(results)} bad files!")
             for result in sorted(results):
                 logger.warning(f"BAD: {result}")
+        else:
+            logger.info("... All Good!")
         return set(results)
 
     def _all_files(self, path: Path = None, level: int = None, expect_prefix: str = '') -> Iterable[Path]:
@@ -59,7 +61,7 @@ class Check:
             path = self._database._base_path / self._database._STORE_DIR
             level = self._database.config.store_split_count
         if level > 0:
-            for child in path.iterdir():
+            for child in sorted(path.iterdir()):
                 if child.is_dir() and len(child.name) == self._database.config.store_split_size:
                     yield from self._all_files(child, level-1, expect_prefix+child.name)
         else:
@@ -127,6 +129,7 @@ class Check:
             for file in bad:
                 if file not in really_bad:
                     logger.error(f"Invalidated: {file}")
+        logger.info("... All Good!")
         return bad
 
 

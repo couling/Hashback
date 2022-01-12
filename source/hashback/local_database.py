@@ -90,7 +90,6 @@ class LocalDatabaseServerSession(protocol.ServerSession):
     client_config: protocol.ClientConfiguration = None
 
     def __init__(self, database: LocalDatabase, client_path: Path):
-        super().__init__()
         self._database = database
         self._client_path = client_path
         with (client_path / _CONFIG_FILE).open('r') as file:
@@ -215,7 +214,6 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     _ROOTS = 'roots'
 
     def __init__(self, client_session: LocalDatabaseServerSession, session_path: Path):
-        super().__init__()
         self._server_session = client_session
         self._session_path = session_path
         try:
