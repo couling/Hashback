@@ -53,7 +53,6 @@ class Client(Protocol):
 class ClientSession(protocol.ServerSession):
 
     def __init__(self, client: Client, client_config: http_protocol.USER_CLIENT_CONFIG):
-        super().__init__()
         self._client = client
         self._client_config = client_config
 
@@ -71,8 +70,8 @@ class ClientSession(protocol.ServerSession):
         raise NotImplementedError()
 
     async def list_backups(self) -> List[Tuple[datetime, str]]:
-        # TODO
-        raise NotImplementedError()
+        all_backups: http_protocol.ListBackup = await self._client.request(http_protocol.LIST_BACKUPS)
+        return [(backup.backup_date, backup.description) for backup in all_backups.__root__]
 
     async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False,
                            description: Optional[str] = None) -> BackupSession:
@@ -127,7 +126,6 @@ class ClientSession(protocol.ServerSession):
 class ClientBackupSession(protocol.BackupSession):
 
     def __init__(self, client_session: ClientSession, config: BackupSessionConfig):
-        super().__init__()
         self._client_session = client_session
         self._config = config
         self._client = client_session._client
@@ -223,7 +221,6 @@ class RequestsClient(Client):
     _http_session: requests.Session
 
     def __init__(self, server: http_protocol.ServerProperties):
-        super().__init__()
         server_path = server.copy()
         server_path.credentials = None
         self._base_url = server_path.format_url()
@@ -328,7 +325,6 @@ class RequestsClient(Client):
 
 class RequestResponse(protocol.FileReader):
     def __init__(self, response: requests.Response, executor: Executor):
-        super().__init__()
         self._response = response
         self._content = self._response.iter_content(protocol.READ_SIZE)
         self._cached_content = BytesIO()
