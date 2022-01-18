@@ -1,15 +1,17 @@
 import asyncio
 import logging
+import os
+import multiprocessing
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional, Set
 
 import click
 import dateutil.tz
 
-from .. import backup_algorithm, protocol
 from .db_admin import click_main
-from ..local_database import LocalDatabase, LocalDatabaseBackupSession
+from .. import backup_algorithm, protocol
+from ..local_database import LocalDatabase, LocalDatabaseBackupSession, LocalDatabaseServerSession
 from ..local_file_system import LocalFileSystemExplorer
 from ..misc import run_then_cancel, str_exception
 
@@ -152,6 +154,100 @@ def migrate_single_backup(server_session: protocol.ServerSession, base_path: Pat
             raise
 
     run_then_cancel(_backup())
+
+
+
+
+class Migrator:
+
+    inode_cache: Dict[int, protocol.Inode]
+    exists_cache: Set[str]
+    database: LocalDatabase
+    mp_pool: multiprocessing.Pool
+
+    def __init__(self, server_session: LocalDatabase):
+        self.inode_cache = {}
+        self.exists_cache = set()
+        self.backup_server = server_session
+
+    def backup_dir(self, directory: Path) -> str:
+        logger.info(f"Migrating {directory}")
+        child: os.DirEntry
+        children = {}
+        with os.scandir(directory) as scan:
+            for child in scan:
+                child_inode = self.inode_cache.get(child.inode())
+                if child_inode is not None:
+                    children[child.name] = child_inode
+                    continue
+
+                child_inode = protocol.Inode.from_stat(child.stat(follow_symlinks=False), None)
+                children[child.name] = child_inode
+                if child_inode.type is protocol.FileType.DIRECTORY:
+                    child_inode.hash = self.backup_dir(directory / child.name)
+                if child_inode.type is protocol.FileType.REGULAR:
+                    child_inode.hash = self.backup_regular_file(directory / child.name)
+                elif child.is_symlink():
+                    child_inode.hash = self.backup_symlink(directory / child.name)
+                else:
+                    logger.debug(f"Skipping file of type {child_inode.type}")
+                    children.pop(child.name)
+
+                self.inode_cache[child.inode()] =  child_inode
+
+        directory_content = protocol.Directory(__root__=children).hash()
+
+        ref_hash = directory_content.ref_hash + LocalDatabaseServerSession._DIR_SUFFIX
+        if ref_hash not in self.exists_cache:
+            target_path = self.database.store_path_for(ref_hash=ref_hash)
+            if not target_path.exists():
+                with target_path.open('wb') as file:
+                    file.write(directory_content.content)
+
+            self.exists_cache.add(ref_hash)
+
+        return directory_content.ref_hash
+
+    def backup_regular_file(self, file_path: Path) -> str:
+        logger.debug(f"File Backup {file_path}")
+        hash_obj = protocol.HashType()
+        with file_path.open('rb') as file:
+            bytes_read = file.read(protocol.READ_SIZE)
+            while bytes_read:
+                hash_obj.update(bytes_read)
+                bytes_read = file.read(protocol.READ_SIZE)
+
+        ref_hash = hash_obj.hexdigest()
+        if ref_hash not in self.exists_cache:
+            target_path = self.database.store_path_for(ref_hash)
+            if not target_path.exists():
+                try:
+                    file_path.link_to(target_path)
+                except OSError as exc:
+                    logger.warning(f"Hardlink Failed {str(exc)}")
+                    temp_file_path = target_path.parent / (target_path.name + ".tmp")
+                    with temp_file_path.open('wb') as target, file_path.open('rb') as source:
+                        bytes_read = source.read(protocol.READ_SIZE)
+                        while bytes_read:
+                            target.write(bytes_read)
+                            bytes_read = source.read(protocol.READ_SIZE)
+                    temp_file_path.rename(target_path)
+
+            self.exists_cache.add(ref_hash)
+
+        return ref_hash
+
+
+    def backup_symlink(self, file_path: Path) -> str:
+        content =  os.readlink(file_path)
+        ref_hash = protocol.hash_content(content)
+        target_path = self.database.store_path_for(ref_hash)
+        if not target_path.exists():
+            with target_path.open('wb') as file:
+                file.write(content)
+        return ref_hash
+
+
 
 
 def offset_base_path(scan_spec: protocol.ClientConfiguredBackupDirectory,

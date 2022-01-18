@@ -147,7 +147,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
     async def iter_children(self) -> AsyncIterable[Tuple[str, protocol.Inode]]:
         if self._filter_node is not None and self._filter_node.filter_type is protocol.FilterType.EXCLUDE:
             # This LocalDirectoryExplorer has been created for an excluded directory, but there may be exceptions.
-            logger.debug("Excluded %s has %s exceptions", self._base_path, len(self._filter_node.exceptions))
+            logger.debug("Listing %s exceptions for %s ", len(self._filter_node.exceptions), self._base_path)
             for child_name, exception in self._filter_node.exceptions.items():
                 child = self._base_path / child_name
                 if exception.filter_type is protocol.FilterType.INCLUDE:
