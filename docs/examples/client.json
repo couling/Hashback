@@ -1,0 +1,5 @@
+{
+  "database_url": "http://localhost:8000",
+  "client_id": "96dff0a9-d586-45bb-b971-d81cdc46acd5",
+  "credentials": "client-credentials.json"
+}

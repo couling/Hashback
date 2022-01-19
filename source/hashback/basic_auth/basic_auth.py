@@ -38,10 +38,10 @@ class BasicAuthDb:
         def _write(file, *_):
             file.write(f"{username}:{salt}:{password_hash}\n")
 
-        logging.debug(f"Creating user {username}")
+        logger.debug(f"Creating user {username}")
         salt, password_hash = self._hash_new_password(password)
         self.modify_db_record(username=username, on_found=_write, on_not_found=_write)
-        logging.info(f"User {username} created")
+        logger.info(f"User {username} created")
 
     def unregister_user(self, username: str):
         def _raise(*_):
@@ -50,9 +50,9 @@ class BasicAuthDb:
         def _write(*_):
             pass
 
-        logging.debug(f"Deleting user {username}")
+        logger.debug(f"Deleting user {username}")
         self.modify_db_record(username=username, on_found=_write, on_not_found=_raise)
-        logging.info(f"User {username} deleted")
+        logger.info(f"User {username} deleted")
 
     def list_users(self) -> Set[str]:
         all_users = set()
@@ -64,19 +64,22 @@ class BasicAuthDb:
 
     def modify_db_record(self, username: str, on_found, on_not_found):
         new_file_path = self._auth_file.parent / (self._auth_file.name + '.new')
-        new_file = new_file_path.open('x')
+        new_file_path.touch(mode=0o600, exist_ok=False)
         found = False
         try:
-            with new_file:
-                with self._auth_file.open('r') as old_file:
-                    for line in old_file:
-                        line_user, line_salt, line_hash_pw = line.split(":", 3)
-                        if line_user == username:
-                            found = True
-                            on_found(new_file, line_salt, line_hash_pw)
-                        else:
-                            new_file.write(line)
-                if not found:
+            with new_file_path.open('w') as new_file:
+                try:
+                    with self._auth_file.open('r') as old_file:
+                        for line in old_file:
+                            line_user, line_salt, line_hash_pw = line.split(":", 3)
+                            if line_user == username:
+                                found = True
+                                on_found(new_file, line_salt, line_hash_pw)
+                            else:
+                                new_file.write(line)
+                    if not found:
+                        on_not_found(new_file)
+                except FileNotFoundError:
                     on_not_found(new_file)
             new_file_path.rename(self._auth_file)
         except:

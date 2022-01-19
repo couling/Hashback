@@ -1,27 +1,59 @@
+# ⚠️ Project Status ⚠️
+
+⚠️ Hashback is still in ALPHA. ⚠️
+
+⚠️ Do NOT use this for critical backups! ⚠️
+
 # Hashback
-Hashback is a part-written backup system including backup server and command-line backup tools.
+Hashback is a backup system.
 
-It was inspired by the need to backup multiple servers with shared content that can often be moved around and renamed.
-In such situations there is often a lot of duplication in the backup taking up space on disk and wasting a lot of time 
-during the backup window.
+It's designed to take snapshot backups of multiple devices (eg: multiple servers) Using only the storage you might 
+expect for incremental backups.
 
-Hashback indexes by the sha256 hash of their content.  Metadata and file names is stored in the directory listings and 
-they are themselves hashed and indexed the same way.  Ultimately this allows things to be renamed, and metadata modified 
-without storing massive repetition in the database.
+Hashback indexes files and directories by the sha256 hash of their content.  Metadata data such as file ownership and 
+file names are stored in the directory listings, not the file backups allowing files to be moved around and renamed 
+without duplicating the file content, even when moving across devices.
 
-## This repo includes
+# Configure your server
 
-### Hasback command line tool
+You can install with either: 
+ - Docker ([instructions](https://github.com/couling/Hashback/tree/main/docs/user/install_server_with_docker.md)) 
+ - Python ([instructions](https://github.com/couling/Hashback/tree/main/docs/user/install_server_with_python))
 
-This creates backups locally and can be set on a schedule to run unassisted.  Backup configuration is stored server side
-so there's no need to log into every client to update their configuration.
+# Configure your client
 
-### Hashback db_admin tool
+The client can be run through docker-compose as well.  Just remember to bind mount your data directory in so that it can
+be backed up.
 
-Besides the obvious things like creating a new backup database, this tool can also be used to seed backups by copying or 
-even hardlinking a file tree into the local database.  *Hardlinking should be used with great care.*
+See the output from authorizing your client for these values:
 
-### Hashback HTTP server
+    # See installing server instructions for credentials
 
-Hashback has it's own HTTP protocol for storing backups.  The hashback HTTP server implements that protocol using 
-FastAPI and, by default, running with gunicorn.
+    hashback configure \
+        --client-id 3bed0c4f-a1c9-4f37-b2b5-8b393c190a40 \
+        --database-url https://example.com/ \
+        --credentials '{
+            "auth_type": "basic", 
+            "username": "3bed0c4f-a1c9-4f37-b2b5-8b393c190a40", 
+            "password": "fa72112f-a9a8-4be2-b293-124bf875f86c"
+          }'
+        
+
+
+# This repo includes
+
+## `hashback` (client) command line tool
+
+This is the backup client intended for taking frequent snapshots systems as well as restoring backups.
+
+hashback can be used to backup to a local database without using a server or it can backup to a remote server.
+
+## `hashback-db-admin` admin commandline tool
+
+This is used to create and manage backup databases.  This is initially required to setup a device in the database before
+that device can begin to backup.
+
+## `hashback-basic-server` a simple http backup server
+
+This is intended as an MVP server.  It only supports http auth type basic.  It is highly recommended to sit this behind 
+https reverse gateway such as [Traefik](https://traefik.io/).

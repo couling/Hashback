@@ -1,0 +1,19 @@
+version: "3.4"
+
+services:
+  hashback:
+    image: couling/hashback
+    command: "hashback-basic-server run-foreground"
+    hostname: hashback
+    restart: always
+    ports:
+      - 8000:80
+    volumes:
+      - config:/etc/hashback
+      # You many prefer to bind-mount your backup data instead of putting it in a volume
+      # - /var/lib/hashback:/data
+      - data:/data
+
+volumes:
+  config: {}
+  data: {}

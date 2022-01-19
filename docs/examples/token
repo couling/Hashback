@@ -1,0 +1,3 @@
+2022-01-19 20:31:46,642 - hashback.basic_auth.server - INFO - Authorizing Client: bob (3bed0c4f-a1c9-4f37-b2b5-8b393c190a40)
+{"auth_type": "basic", "username": "bob", "password": "971df27c-bae3-4e87-b916-eb4b1bfd30d1"}
+2022-01-19 20:31:46,645 - root - INFO - User 3bed0c4f-a1c9-4f37-b2b5-8b393c190a40 created

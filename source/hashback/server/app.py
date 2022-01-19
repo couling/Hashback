@@ -89,6 +89,14 @@ async def about_me(session: protocol.ServerSession = fastapi.Depends(user_sessio
     return session.client_config
 
 
+@endpoint(http_protocol.LIST_BACKUPS)
+async def list_backups(session: protocol.ServerSession = fastapi.Depends(user_session)) -> http_protocol.LIST_BACKUPS:
+    all_backups = await session.list_backups()
+    descriptions = [http_protocol.BackupDescription(backup_date=backup_date, description=description)
+                    for backup_date, description in all_backups]
+    return http_protocol.ListBackup(__root__=descriptions)
+
+
 @endpoint(http_protocol.BACKUP_LATEST)
 async def get_backup_latest(session: protocol.ServerSession = fastapi.Depends(user_session)) -> protocol.Backup:
     return await session.get_backup(backup_date=None)

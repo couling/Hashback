@@ -5,7 +5,8 @@ import click
 
 from .. import protocol
 from ..local_database import LocalDatabase, Configuration
-from ..misc import setup_logging, register_clean_shutdown
+from ..misc import register_clean_shutdown
+from ..log_config import setup_logging
 
 logger = logging.getLogger(__name__)
 

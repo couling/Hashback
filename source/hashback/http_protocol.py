@@ -115,6 +115,15 @@ class GetDirectoryResponse(BaseModel):
     children: Dict[str, protocol.Inode]
 
 
+class BackupDescription(BaseModel):
+    backup_date: datetime
+    description: Optional[str]
+
+
+class ListBackup(BaseModel):
+    __root__: List[BackupDescription]
+
+
 HELLO = Endpoint('GET', '/', None, ServerVersion)
 
 # User Session
@@ -123,6 +132,7 @@ BACKUP_LATEST = Endpoint('GET', '/backups/latest', None, protocol.Backup)
 BACKUP_BY_DATE = Endpoint('GET', '/backups/{backup_date}', None, protocol.Backup)
 GET_DIRECTORY = Endpoint('GET', '/directory/{ref_hash}', None, GetDirectoryResponse)
 GET_FILE = Endpoint('GET', "/file/{ref_hash}", None, protocol.FileReader)
+LIST_BACKUPS = Endpoint('GET', '/list_backups', None, ListBackup)
 
 # Backup Session
 START_BACKUP = Endpoint('POST', '/backup-session/new', {'backup_date', 'allow_overwrite', 'description'},
