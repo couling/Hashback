@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import AsyncIterable, Dict, List, NamedTuple, Optional, Protocol, Tuple, Union
 from uuid import UUID, uuid4
 
-import aiofiles.os
 import dateutil.tz
 from pydantic import BaseModel, Field, validator
 
@@ -381,18 +380,10 @@ class ServerSession(Protocol):
         """
 
     @abstractmethod
-    async def get_file(self, inode: Inode, target_path: Optional[Path] = None, restore_permissions: bool = False,
-                       restore_owner: bool = False) -> Optional[FileReader]:
+    async def get_file(self, inode: Inode) -> Optional[FileReader]:
         """
         Reads a file.
         :param inode: The handle to the file
-        :param target_path: The local file path to write the new file. Parent directory must exist, no file at this path
-            may exist or a FileExists exception will be raised
-        :param restore_permissions: If target_path is specified, restore the original file permissions (mode).
-            WARNING this will restore setuid and setgid bits also.
-        :param restore_owner: If target_path is specified, restore ownership will not.
-        :return: If target_path is None then the file content will be returned as a bytes object.  If target_path is
-            not None then None is returned.
         """
 
     async def close(self):
@@ -553,28 +544,3 @@ async def async_hash_content(content: FileReader):
         hash_object.update(bytes_read)
         bytes_read = await content.read(READ_SIZE)
     return hash_object.hexdigest()
-
-
-async def restore_file(file_path: Path, inode: Inode, content: FileReader, restore_owner: bool, restore_permissions):
-    # TODO verify hash as we go
-    if inode.type is FileType.REGULAR:
-        async with aiofiles.open(file_path, 'xb') as target:
-            bytes_read = await content.read(READ_SIZE)
-            while bytes_read:
-                await target.write(bytes_read)
-                bytes_read = await content.read(READ_SIZE)
-
-    elif inode.type is FileType.LINK:
-        link_target = (await content.read()).decode()
-        file_path.symlink_to(link_target)
-    else:  # inode.type == protocol.FileType.PIPE:
-        if inode.hash != EMPTY_FILE:
-            raise ValueError(f"File of type {inode.type} must be empty.  But this one is not: {inode.hash}")
-        os.mkfifo(file_path)
-
-    if restore_owner:
-        os.chown(file_path, inode.uid, inode.gid, follow_symlinks=False)
-    if restore_permissions:
-        os.chmod(file_path, inode.mode, follow_symlinks=False)
-    timestamp = inode.modified_time.timestamp()
-    os.utime(file_path, (timestamp, timestamp), follow_symlinks=False)

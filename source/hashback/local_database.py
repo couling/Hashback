@@ -181,17 +181,10 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         with self._database.store_path_for(inode_hash).open('r') as file:
             return Directory.parse_raw(file.read())
 
-    async def get_file(self, inode: Inode, target_path: Optional[Path] = None,
-                       restore_permissions: bool = False, restore_owner: bool = False) -> Optional[protocol.FileReader]:
+    async def get_file(self, inode: Inode) -> Optional[protocol.FileReader]:
         if inode.type not in (protocol.FileType.REGULAR, protocol.FileType.LINK, protocol.FileType.PIPE):
             raise ValueError(f"Cannot read a file type {inode.type}")
-
         result_path = self._database.store_path_for(inode.hash)
-        if target_path is not None:
-            with await AsyncFile.open(result_path, "r") as content:
-                await protocol.restore_file(target_path, inode, content, restore_owner, restore_permissions)
-            return None
-
         return await AsyncFile.open(result_path, "r")
 
     def complete_backup(self, meta: protocol.Backup, overwrite: bool):

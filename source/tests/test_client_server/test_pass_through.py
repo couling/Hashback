@@ -159,45 +159,6 @@ class TestPassThroughServerSession(BaseTestPassThrough):
         asyncio.get_event_loop().run_until_complete(read_file())
         assert len(mock_file.close.mock_calls) == 0
 
-    @pytest.mark.parametrize('file_type', (protocol.FileType.REGULAR, protocol.FileType.LINK))
-    @pytest.mark.parametrize('streaming', (True, False))
-    def test_get_file_restore(self, streaming, tmp_path: Path, file_type):
-        target_path = tmp_path / 'test_file.txt'
-        content = b"this is a test"
-        content_reader = iter((content[:4], content[4:], bytes()))
-        mock_file = MagicMock()
-        mock_file.read = AsyncMock(side_effect=lambda _: next(content_reader))
-        mock_file.file_size = None if streaming else len(content)
-
-        modified_time = datetime.now(timezone.utc) - timedelta(days=365)
-        modified_time = modified_time.replace(microsecond=0)
-
-        file_inode = protocol.Inode(
-            modified_time=modified_time,
-            type=file_type,
-            mode=0o755,
-            size=599,
-            uid=1000,
-            gid=1001,
-            hash=protocol.hash_content(content),
-        )
-        target_path.parent.mkdir(exist_ok=True, parents=True)
-        self.mock_backend_session.get_file = AsyncMock(return_value=mock_file)
-        asyncio.get_event_loop().run_until_complete(self.client_session.get_file(
-            inode=file_inode,
-            target_path=target_path,
-            restore_permissions=False,
-            restore_owner=False,
-        ))
-        if file_type is protocol.FileType.REGULAR:
-            with target_path.open('rb') as file:
-                restored_content = file.read()
-            assert restored_content == content
-            assert target_path.stat().st_mtime == modified_time.timestamp()
-        else:
-            restored_content = os.readlink(target_path).encode()
-            assert restored_content == content
-
 
 class MockFileReader(protocol.FileReader):
 

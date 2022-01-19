@@ -101,25 +101,10 @@ class ClientSession(protocol.ServerSession):
         result = await self._client.request(http_protocol.GET_DIRECTORY, ref_hash=inode.hash)
         return Directory(__root__=result.children)
 
-    async def get_file(self, inode: Inode, target_path: Optional[Path] = None, restore_permissions: bool = False,
-                       restore_owner: bool = False) -> Optional[protocol.FileReader]:
+    async def get_file(self, inode: Inode) -> Optional[protocol.FileReader]:
         if inode.type is protocol.FileType.DIRECTORY:
             raise protocol.InvalidArgumentsError(f'Cannot get file of type {inode.type}')
-        result = await self._client.request(
-            http_protocol.GET_FILE, ref_hash=inode.hash,
-            restore_permissions=restore_permissions,
-            restore_owner=restore_owner,
-        )
-        if target_path:
-            with result:
-                await protocol.restore_file(
-                    file_path=target_path,
-                    inode=inode,
-                    content=result,
-                    restore_owner=restore_owner,
-                    restore_permissions=restore_permissions,
-                )
-            return None
+        result = await self._client.request(http_protocol.GET_FILE, ref_hash=inode.hash)
         return result
 
 
