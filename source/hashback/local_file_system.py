@@ -44,7 +44,7 @@ class AsyncFile(protocol.FileReader):
             raise
 
     @classmethod
-    async def open(cls, file_path: Path, mode: str, executor = None, **kwargs):
+    async def open(cls, file_path: Path, mode: str, executor = None, **kwargs) -> "AsyncFile":
         if executor is None:
             executor = _get_default_executor()
         return await asyncio.get_running_loop().run_in_executor(
@@ -76,6 +76,9 @@ class AsyncFile(protocol.FileReader):
             del self._buffer
             self._offset = 0
         return result
+
+    async def write(self, buffer: bytes):
+        await asyncio.get_running_loop().run_in_executor(self._executor, self._file.write, buffer)
 
     def seek(self, offset: int, whence: int):
         if self._buffer:
@@ -226,12 +229,12 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         self._all_files[(stat.st_dev, stat.st_ino)] = inode
         return inode
 
-    async def open_child(self, name: str, mode: str) -> protocol.FileReader:
+    async def open_child(self, name: str) -> protocol.FileReader:
         child_type = self._stat_child(name).type
         child_path = self._base_path / name
 
         if child_type == protocol.FileType.REGULAR:
-            return AsyncFile(child_path, mode)
+            return AsyncFile(child_path, 'rb')
 
         if child_type == protocol.FileType.LINK:
             return BytesReader(os.readlink(child_path).encode())
@@ -240,6 +243,81 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
             return BytesReader(bytes(0))
 
         raise ValueError(f"Cannot open child of type {child_type}")
+
+    async def restore_child(self, name: str, meta: protocol.Inode, content: Optional[protocol.FileReader],
+                            clobber_existing: bool = True, **restore_meta: bool):
+        try:
+            restore_function = self._RESTORE_TYPES[meta.type]
+        except KeyError:
+            raise ValueError(f"Cannot restore file of type {meta.type}")
+
+        child_path = self._base_path / name
+        await restore_function(child_path=child_path, content=content, clobber_existing=clobber_existing)
+        await self._restore_meta(child_path=child_path, meta=meta, restore_meta=restore_meta)
+
+    @staticmethod
+    async def _restore_directory(child_path: Path, content: Optional[protocol.FileReader], clobber_existing: bool):
+        logger.info(f"Restoring directory {child_path}")
+        if clobber_existing and child_path.is_symlink():
+            child_path.unlink()
+        if content is not None:
+            raise ValueError("Content cannot be supplied for directory")
+        child_path.mkdir(parents=False, exist_ok=True)
+
+    @staticmethod
+    async def _restore_regular(child_path: Path, content: Optional[protocol.FileReader], clobber_existing: bool):
+        if clobber_existing and child_path.is_symlink() or child_path.is_file():
+            child_path.unlink()
+        with AsyncFile(child_path, 'w') as file:
+            bytes_read = await content.read(protocol.READ_SIZE)
+            while bytes_read:
+                await file.write(bytes_read)
+
+    @staticmethod
+    async def _restore_link(child_path: Path, content: Optional[protocol.FileReader],  clobber_existing: bool):
+        logger.info(f"Restoring symbolic link {child_path}")
+        if clobber_existing and child_path.is_symlink():
+            logger.debug(f"Removing existing link")
+            child_path.unlink()
+        link_content = await content.read(protocol.READ_SIZE)
+        extra_bytes = await content.read(protocol.READ_SIZE)
+        while extra_bytes:
+            link_content += extra_bytes
+            extra_bytes = await content.read(protocol.READ_SIZE)
+
+        os.symlink(src=child_path, dst=link_content)
+
+    @staticmethod
+    async def _restore_pipe(child_path: Path, content: Optional[protocol.FileReader],  clobber_existing: bool):
+        logger.info(f"Restoring child {child_path}")
+        if content is not None:
+            if content.read(1):
+                raise ValueError(f"Cannot restore link with content")
+        if clobber_existing:
+            if child_path.is_symlink():
+                child_path.unlink()
+            elif child_path.is_fifo():
+                return
+        os.mkfifo(child_path)
+
+    @staticmethod
+    async def _restore_meta(child_path: Path, meta: protocol.Inode, restore_meta: Dict[str,bool]):
+        if restore_meta.get('mode', True):
+            os.chmod(child_path, mode=meta.mode, follow_symlinks=False)
+
+        change_uid = restore_meta.get('uid', True)
+        change_gid = restore_meta.get('gid', True)
+        if change_uid or change_gid:
+            os.chown(
+                path=child_path,
+                uid=meta.uid if change_uid else -1,
+                gid=meta.gid if change_gid else -1,
+                follow_symlinks=False,
+            )
+
+        if restore_meta.get('modified_time', True):
+            mod_time = meta.modified_time.timestamp()
+            os.utime(path=child_path, times=(mod_time, mod_time), follow_symlinks=False)
 
     def get_child(self, name: str) -> protocol.DirectoryExplorer:
         return type(self)(
@@ -253,6 +331,13 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         if name is None:
             return str(self._base_path)
         return str(self._base_path / name)
+
+    _RESTORE_TYPES = {
+        protocol.FileType.DIRECTORY: _restore_directory,
+        protocol.FileType.REGULAR: _restore_regular,
+        protocol.FileType.LINK: _restore_link,
+        protocol.FileType.PIPE: _restore_pipe,
+    }
 
 
 class LocalFileSystemExplorer:

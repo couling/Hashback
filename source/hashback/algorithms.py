@@ -126,7 +126,7 @@ class BackupController:
                 if child_inode.hash is None:
                     # The explorer will correctly handle reading the content of links etc.
                     # Opening a symlink will return a reader to read the link itself, NOT the file it links to.
-                    with await explorer.open_child(child_name, mode='r') as file:
+                    with await explorer.open_child(child_name) as file:
                         child_inode.hash = await protocol.async_hash_content(file)
 
             children[child_name] = child_inode
@@ -189,7 +189,7 @@ class BackupController:
         file_path = explorer.get_path(child_name)
         logger.info(f"Uploading {file_path}")
         try:
-            with await explorer.open_child(child_name, 'r') as missing_file_content:
+            with await explorer.open_child(child_name) as missing_file_content:
                 resume_id = uuid4()
                 new_hash = await self.backup_session.upload_file_content(
                     file_content=missing_file_content,

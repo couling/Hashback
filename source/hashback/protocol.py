@@ -6,7 +6,7 @@ import stat
 from abc import abstractmethod
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import AsyncIterable, Dict, List, NamedTuple, Optional, Protocol, Tuple, Union
+from typing import AsyncIterable, Dict, List, NamedTuple, Optional, Protocol, Tuple, Union, Iterable
 from uuid import UUID, uuid4
 
 import dateutil.tz
@@ -412,10 +412,24 @@ class DirectoryExplorer(Protocol):
         """
 
     @abstractmethod
-    async def open_child(self, name: str, mode: str) -> FileReader:
+    async def open_child(self, name: str) -> FileReader:
         """
         Opens a file for async reading or writing.
         :param name: The name of the child to open.
+        """
+
+    @abstractmethod
+    async def restore_child(self, name: str, meta: Inode, content: Optional[FileReader], clobber_existing: bool = True,
+                            **restore_meta: bool):
+        """
+        Restores a file.
+        :param name: The file name of the child to restore.
+        :param meta: The meta of the file to restore such as file permissions and last_modified.
+        :param content: The file content to restore
+        :param clobber_existing: If the child already exists (not as a directory)
+        :param restore_meta: kwargs can be used to suppress restoring particular metadata.
+            By default meta will be restored, but individual properties from the meta can be suppressed by setting their
+            name=False.  Note kwargs "type", "size" and "hash" must be ignored.
         """
 
     @abstractmethod

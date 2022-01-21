@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import click
 from pydantic import BaseSettings
 
-from .backup_algorithm import BackupController
+from .algorithms import BackupController
 from .local_file_system import LocalFileSystemExplorer
 from .log_config import LogConfig, flush_early_logging, setup_early_logging
 from .misc import SettingsConfig, register_clean_shutdown, run_then_cancel

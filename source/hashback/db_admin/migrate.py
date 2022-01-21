@@ -10,7 +10,7 @@ import click
 import dateutil.tz
 
 from .db_admin import click_main
-from .. import backup_algorithm, protocol
+from .. import algorithms, protocol
 from ..local_database import LocalDatabase, LocalDatabaseBackupSession, LocalDatabaseServerSession
 from ..local_file_system import LocalFileSystemExplorer
 from ..misc import run_then_cancel, str_exception
