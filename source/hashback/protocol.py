@@ -1,12 +1,10 @@
 import enum
 import functools
 import hashlib
-import os
 import stat
 from abc import abstractmethod
 from datetime import datetime, timedelta, timezone, tzinfo
-from pathlib import Path
-from typing import AsyncIterable, Dict, List, NamedTuple, Optional, Protocol, Tuple, Union, Iterable
+from typing import AsyncIterable, Dict, Iterable, List, NamedTuple, Optional, Protocol, Tuple, Union
 from uuid import UUID, uuid4
 
 import dateutil.tz
@@ -202,6 +200,9 @@ class ClientConfiguration(BaseModel):
     @property
     def timezone(self) -> tzinfo:
         return dateutil.tz.gettz(self.named_timezone)
+
+    def date_string(self, source_date: datetime) -> str:
+        return source_date.astimezone(self.timezone).isoformat()
 
 
 class BackupSessionConfig(BaseModel):
@@ -419,17 +420,22 @@ class DirectoryExplorer(Protocol):
         """
 
     @abstractmethod
-    async def restore_child(self, name: str, meta: Inode, content: Optional[FileReader], clobber_existing: bool = True,
-                            **restore_meta: bool):
+    async def restore_child(self, name: str, type_: FileType, content: Optional[FileReader], clobber_existing: bool):
         """
         Restores a file.
         :param name: The file name of the child to restore.
-        :param meta: The meta of the file to restore such as file permissions and last_modified.
+        :param type_: The type of file to restore
         :param content: The file content to restore
         :param clobber_existing: If the child already exists (not as a directory)
-        :param restore_meta: kwargs can be used to suppress restoring particular metadata.
-            By default meta will be restored, but individual properties from the meta can be suppressed by setting their
-            name=False.  Note kwargs "type", "size" and "hash" must be ignored.
+        """
+
+    @abstractmethod
+    async def restore_meta(self, name: str, meta: Inode, toggle: Dict[str, bool]):
+        """
+        :param name: The name of the child to restore meta on.
+        :param meta: The inode containing the meta to restore
+        :param toggle: By default meta will be restored, but individual properties from the meta can be suppressed by
+            setting their name=False.  Note "type", "size" and "hash" must be ignored.
         """
 
     @abstractmethod
@@ -444,6 +450,17 @@ class DirectoryExplorer(Protocol):
         """
         Gets a human readable name for a particular child or the parent directory
         :param name: The name of the child or None for the parent
+        """
+
+
+class FileSystemExplorer(Protocol):
+
+    def __call__(self, directory_root: str, filters: Iterable[Filter] = ()) -> DirectoryExplorer:
+        """
+        Gets a directory explorer for the given backup root
+        :param directory_root: The root specification.
+        :param filters: Optional iterable of filters to ignore on search. This does not affect restoring.
+        :returns: A DirectoryExplorer pointing to the root path with the given filters embedded.
         """
 
 

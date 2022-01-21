@@ -6,10 +6,9 @@ from concurrent.futures import Executor, ThreadPoolExecutor
 from datetime import MINYEAR, datetime
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import BinaryIO, Dict, AsyncIterable, List, Optional, Tuple
+from typing import AsyncIterable, BinaryIO, Dict, Iterable, List, Optional, Tuple
 
 from . import file_filter, protocol
-
 
 logger = logging.getLogger(__name__)
 
@@ -244,16 +243,15 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
 
         raise ValueError(f"Cannot open child of type {child_type}")
 
-    async def restore_child(self, name: str, meta: protocol.Inode, content: Optional[protocol.FileReader],
-                            clobber_existing: bool = True, **restore_meta: bool):
+    async def restore_child(self, name: str, type_: protocol.FileType, content: Optional[protocol.FileReader],
+                            clobber_existing: bool):
         try:
-            restore_function = self._RESTORE_TYPES[meta.type]
+            restore_function = self._RESTORE_TYPES[type_]
         except KeyError:
-            raise ValueError(f"Cannot restore file of type {meta.type}")
+            raise ValueError(f"Cannot restore file of type {type_}")
 
         child_path = self._base_path / name
         await restore_function(child_path=child_path, content=content, clobber_existing=clobber_existing)
-        await self._restore_meta(child_path=child_path, meta=meta, restore_meta=restore_meta)
 
     @staticmethod
     async def _restore_directory(child_path: Path, content: Optional[protocol.FileReader], clobber_existing: bool):
@@ -300,13 +298,13 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                 return
         os.mkfifo(child_path)
 
-    @staticmethod
-    async def _restore_meta(child_path: Path, meta: protocol.Inode, restore_meta: Dict[str,bool]):
-        if restore_meta.get('mode', True):
+    async def restore_meta(self, child: str, meta: protocol.Inode, toggle: Dict[str,bool]):
+        child_path = self._base_path / child
+        if toggle.get('mode', True):
             os.chmod(child_path, mode=meta.mode, follow_symlinks=False)
 
-        change_uid = restore_meta.get('uid', True)
-        change_gid = restore_meta.get('gid', True)
+        change_uid = toggle.get('uid', True)
+        change_gid = toggle.get('gid', True)
         if change_uid or change_gid:
             os.chown(
                 path=child_path,
@@ -315,7 +313,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                 follow_symlinks=False,
             )
 
-        if restore_meta.get('modified_time', True):
+        if toggle.get('modified_time', True):
             mod_time = meta.modified_time.timestamp()
             os.utime(path=child_path, times=(mod_time, mod_time), follow_symlinks=False)
 
@@ -346,15 +344,15 @@ class LocalFileSystemExplorer:
     def __init__(self):
         self._all_files = {}
 
-    def __call__(self, directory_root: protocol.ClientConfiguredBackupDirectory) -> LocalDirectoryExplorer:
-        base_path = Path(directory_root.base_path)
-        if not base_path.is_absolute():
-            raise ValueError(f"Backup path is not absolute: {base_path}")
+    def __call__(self, directory_root: str, filters: Iterable[protocol.Filter] = ()) -> LocalDirectoryExplorer:
+
+        base_path = Path(directory_root)
+
         if not base_path.is_dir():
             raise ValueError(f"Backup path is not a directory: {base_path}")
-        ignore_patterns, root_filter_node = file_filter.normalize_filters(directory_root.filters)
+        ignore_patterns, root_filter_node = file_filter.normalize_filters(filters)
         return LocalDirectoryExplorer(
-            base_path=Path(directory_root.base_path),
+            base_path=Path(base_path),
             ignore_patterns=ignore_patterns,
             filter_node=root_filter_node,
             all_files=self._all_files,

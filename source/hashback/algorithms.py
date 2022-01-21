@@ -1,6 +1,6 @@
 import logging
 from asyncio import gather
-from typing import Callable, Dict, NamedTuple, Optional
+from typing import Dict, Iterable, NamedTuple, Optional
 from uuid import uuid4
 
 from . import protocol
@@ -16,9 +16,7 @@ class ScanResult(NamedTuple):
 
 class BackupController:
 
-    def __init__(self,
-                 file_system_explorer: Callable[[protocol.ClientConfiguredBackupDirectory], protocol.DirectoryExplorer],
-                 backup_session: protocol.BackupSession):
+    def __init__(self, file_system_explorer: protocol.FileSystemExplorer, backup_session: protocol.BackupSession):
         self.all_files = {}
         self.backup_session = backup_session
         self.file_system_explorer = file_system_explorer
@@ -81,8 +79,7 @@ class BackupController:
 
 
     async def _scan_directory(self, explorer: protocol.DirectoryExplorer,
-                              last_backup: Optional[protocol.Inode]
-                              ) -> ScanResult:
+                              last_backup: Optional[protocol.Inode]) -> ScanResult:
 
         if self.read_last_backup and last_backup is not None:
             last_backup_children = (await self.backup_session.server_session.get_directory(last_backup)).children
@@ -171,7 +168,7 @@ class BackupController:
             # Retry the directory now that all files have been uploaded.
             # We let the server know this replaces the previous request.  Some servers may place a marker on the session
             # preventing us from completing until unsuccessful requests have been replaced.
-            server_response = await self.backup_session.directory_def(directory.definition, replaces=server_response.missing_ref)
+            server_response = await self.backup_session.directory_def(directory.definition, server_response.missing_ref)
             if not server_response.success:
                 raise protocol.ProtocolError(
                     "Files disappeared server-side while backup is in progress.  "
@@ -207,3 +204,117 @@ class BackupController:
         except OSError as exc:
             logger.error(f"Cannot read file to upload: {file_path} - {str_exception(exc)}")
             del directory.children[child_name]
+
+
+class RestoreController:
+    restore_meta_toggles: Dict[str, bool]
+
+    def __init__(self, server_session: protocol.ServerSession, file_system_explorer: protocol.FileSystemExplorer):
+        self._server_session = server_session
+        self._file_system_explorer = file_system_explorer
+
+        # Various toggles.
+        self.clobber_existing = True
+        self.delete_new = False
+        self.check_meta_before_overwrite = False
+        self.restore_meta = True
+        self.restore_meta_toggles  = {}
+
+    async def full_restore(self, backup: protocol.Backup):
+        """
+        Restores an entire backup to the client's configured locations.  This will log warnings if the backup
+        does not contain all roots in the configuration.  It will raise a ValueError a root has no configuration.
+        :param backup:  The backup to restore.
+        """
+
+        client_config = self._server_session.client_config
+        logger.info(f"Restoring backup {client_config.date_string(backup.backup_date)}: {backup.description}")
+        target_configuration = client_config.backup_directories
+
+        missing = [root for root in backup.roots.keys() if root not in target_configuration]
+        if missing:
+            raise ValueError(f"Cannot restore root(s).  The target path is not configured: {missing}")
+
+        missing = [root for root in target_configuration.keys() if root not in backup.roots]
+        if missing:
+            logger.warning(f"Configured backup directories not in this backup {missing}")
+
+        for root, source_dir in backup.roots.items():
+            target_dir = self._file_system_explorer(target_configuration[root].base_path)
+            logger.info(f"Restoring root {root} to {target_dir}")
+            await self.restore_directory(source_dir, target_dir)
+
+    async def partial_restore(self, backup_root: protocol.Inode, source_path: Optional[str], target_path: str):
+        """
+        Partially restores a backup.  This can restore at most one root and it must be told where to restore it to.
+        The caller takes responsibility for fetching the backup root and matching it to a client configuration.
+        :param backup_root: The root inode of the backup
+        :param source_path: An optional child path in the root.  Child paths are always seperated with "/" irrespective
+            of the current or original operating system.
+        :param target_path: A target path string to be interpreted by the file system explorer.
+            Confusingly enough this might use backslashes eg: a local filesystem on MS Windows.
+        """
+
+        target_dir = self._file_system_explorer(directory_root=target_path)
+
+        if source_path is not None:
+            # Backups use / for separator regardless of operating system.  Anything else would get very messy when
+            # restoring backups from one OS to another.
+            try:
+                for source_child in source_path.split("/"):
+                    source_dir = await self._server_session.get_directory(backup_root)
+                    backup_root = source_dir.children[source_child]
+
+            except KeyError as ex:
+                raise FileNotFoundError(f"path '{source_path}' does not exist in") from ex
+
+            # source_child WILL have been set.
+            # split() never returns the empty set so the above for loop must have executed at least once
+            await self.restore_file(backup_root, target_dir, source_child)
+
+        else:
+            # For a bunch of implementation reasons. Backup roots are always directories.
+            # Not least, there would be no filename here if the backup root was a file.
+            await self.restore_directory(backup_root, target_dir)
+
+    async def restore_directory(self, source_dir: protocol.Inode, target_dir: protocol.DirectoryExplorer):
+        """
+        Low level restore function.  Will ensure all files in the backup for source_dir are restored to the target_dir.
+        It does NOT update any meta on target_dir.
+        :param source_dir: Source directory inode to read the backup from
+        :param target_dir: Target directory file exporer to write the directory contents to.
+        """
+        assert source_dir.type is protocol.FileType.DIRECTORY
+
+        directory = await self._server_session.get_directory(source_dir)
+
+        if self.delete_new:
+            await self._delete_new(directory, target_dir)
+
+        for child_name, inode in directory.children.items():
+            await self.restore_file(inode, target_dir, child_name)
+
+    async def restore_file(self, inode: protocol.Inode, target_dir: protocol.DirectoryExplorer, child_name: str):
+        """
+        Low level restore function.  Will restore a file or directory as the child of target_dir.
+        :param inode: The backup inode to restore
+        :param target_dir: The target dir to restore the file or directory into.
+        :param child_name: The name to give the file or directory inside target_dir.
+        """
+        if self.check_meta_before_overwrite:
+            # TODO
+            raise NotImplementedError("Checking meta has not been implemented yet")
+
+        if inode.type is protocol.FileType.DIRECTORY:
+            await target_dir.restore_child(child_name, inode.type, None, self.clobber_existing)
+            await self.restore_directory(inode, target_dir.get_child(child_name))
+        else:
+            with await self._server_session.get_file(inode) as content:
+                await target_dir.restore_child(child_name, inode.type, content, self.clobber_existing)
+
+        if self.restore_meta:
+            await target_dir.restore_meta(child_name, inode, self.restore_meta_toggles)
+
+    async def _delete_new(self, directory: Iterable[str], target_dir: protocol.DirectoryExplorer):
+        # TODO
+        raise NotImplementedError(f"Deleting files has not been added to the DirectoryExplorer protocol")
