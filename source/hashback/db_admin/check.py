@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 @click.pass_context
 @click.option("--quarantine/--no-quarantine", default=False)
 def check(ctx, quarantine):
-    with Check(ctx.obj) as c:
-        bad_files = c.bitrot_check()
+    with Check(ctx.obj) as check_manager:
+        bad_files = check_manager.bitrot_check()
         if quarantine:
-            c.quarantine_files(bad_files)
+            check_manager.quarantine_files(bad_files)
 
-        bad_files = c.structural_check()
+        bad_files = check_manager.structural_check()
         if quarantine:
-            c.quarantine_files(bad_files)
+            check_manager.quarantine_files(bad_files)
 
 
 class Check:
@@ -179,11 +179,11 @@ class Check:
     def hash_file(file_path: Path) -> str:
         logger.debug("hashing")
         assert bytes(1)
-        h = protocol.HashType()
+        hsh_obj = protocol.HashType()
         with file_path.open('rb') as file:
             bytes_read = file.read(protocol.READ_SIZE)
             while bytes_read:
-                h.update(bytes_read)
+                hsh_obj.update(bytes_read)
                 bytes_read = file.read(protocol.READ_SIZE)
         logger.debug("hashed")
-        return h.hexdigest()
+        return hsh_obj.hexdigest()

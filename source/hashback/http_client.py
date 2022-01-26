@@ -219,9 +219,6 @@ class RequestsClient(Client):
     async def server_version(self) -> http_protocol.ServerVersion:
         return await self.request(http_protocol.HELLO)
 
-    async def close(self):
-        self._http_session.close()
-
     def _request_object(self, endpoint: http_protocol.Endpoint, params: Dict[str, Any], body = None):
         response = self._send_request(endpoint, params, body)
         return self._parse_response(endpoint, response)

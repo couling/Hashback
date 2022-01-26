@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     class Config(SettingsConfig):
         SETTINGS_FILE_DEFAULT_NAME = 'basic-server.json'
 
-
+    # pylint: disable=no-self-argument,no-self-use
     @root_validator
     def _relative_path(cls, values: Dict[str, Any]):
         for item in 'database_path', 'users_path':

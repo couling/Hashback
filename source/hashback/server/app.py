@@ -17,11 +17,13 @@ logger = logging.getLogger(__name__)
 
 def configure(authorizer: Optional[Callable[[fastapi.Request], Awaitable[security.SimpleAuthorization]]],
               local_database: LocalDatabase):
+    # pylint: disable=invalid-name
     global _authorizer, _local_database
     _authorizer = authorizer
     _local_database = local_database
 
 
+# pylint: disable=invalid-name
 _authorizer: Optional[Callable[[fastapi.Request], Awaitable[security.SimpleAuthorization]]] = None
 _local_database: Optional[LocalDatabase] = None
 
