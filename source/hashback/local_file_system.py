@@ -6,7 +6,7 @@ from concurrent.futures import Executor, ThreadPoolExecutor
 from datetime import MINYEAR, datetime
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import AsyncIterable, BinaryIO, Dict, Iterable, List, Optional, Tuple
+from typing import AsyncIterable, BinaryIO, Dict, Iterable, List, Optional, Tuple, Union
 
 from . import file_filter, protocol
 
@@ -55,7 +55,7 @@ class AsyncFile(protocol.FileReader):
                 next_offset = self._offset + min(num_bytes, len(self._buffer) - self._offset)
                 result = self._buffer[self._offset: next_offset]
                 if len(self._buffer) == next_offset:
-                    del self._buffer
+                    self._buffer = bytes()
                     self._offset = 0
                 else:
                     self._offset = next_offset
@@ -72,7 +72,7 @@ class AsyncFile(protocol.FileReader):
         result = await asyncio.get_running_loop().run_in_executor(self._executor, self._file.read, -1)
         if self._buffer:
             result = self._buffer[self._offset:] + result
-            del self._buffer
+            self._buffer = bytes()
             self._offset = 0
         return result
 
@@ -81,15 +81,12 @@ class AsyncFile(protocol.FileReader):
 
     def seek(self, offset: int, whence: int):
         if self._buffer:
-            del self._buffer
+            self._buffer = bytes()
             self._offset = 0
         self._file.seek(offset, whence)
 
     def tell(self) -> int:
         return self._file.tell() - self._offset
-
-    async def write(self, buffer: bytes):
-        await asyncio.get_running_loop().run_in_executor(self._executor, self._file.write, buffer)
 
     def close(self):
         self._file.close()
@@ -121,6 +118,58 @@ async def async_stat(file_path: Path, executor = None):
     return await asyncio.get_running_loop().run_in_executor(executor, file_path.stat)
 
 
+async def _restore_directory(child_path: Path, content: Optional[protocol.FileReader], clobber_existing: bool):
+    logger.info(f"Restoring directory {child_path}")
+    if clobber_existing and (child_path.is_symlink() or (child_path.exists() and not child_path.is_dir())):
+        child_path.unlink()
+    if content is not None:
+        raise ValueError("Content cannot be supplied for directory")
+    child_path.mkdir(parents=False, exist_ok=True)
+
+
+async def _restore_regular(child_path: Path, content: Optional[protocol.FileReader], clobber_existing: bool):
+    if clobber_existing and (child_path.is_symlink() or child_path.exists()):
+        # This deliberately will fail if the child is a directory. We don't want want to remove an entire directory tree
+        logger.debug(f"Removing original %s", child_path)
+        child_path.unlink()
+    logger.info(f"Restoring file {child_path}")
+    with AsyncFile(child_path, 'x') as file:
+        bytes_read = await content.read(protocol.READ_SIZE)
+        while bytes_read:
+            await file.write(bytes_read)
+            bytes_read = await content.read(protocol.READ_SIZE)
+
+
+async def _restore_link(child_path: Path, content: Optional[protocol.FileReader],  clobber_existing: bool):
+    logger.info(f"Restoring symbolic link {child_path}")
+    if clobber_existing and (child_path.is_symlink() or child_path.exists()):
+        child_path.unlink()
+    link_content = await content.read(protocol.READ_SIZE)
+    extra_bytes = await content.read(protocol.READ_SIZE)
+    while extra_bytes:
+        link_content += extra_bytes
+        extra_bytes = await content.read(protocol.READ_SIZE)
+
+    os.symlink(dst=child_path, src=link_content)
+
+
+async def _restore_pipe(child_path: Path, content: Optional[protocol.FileReader],  clobber_existing: bool):
+    logger.info(f"Restoring child {child_path}")
+    if content is not None:
+        if await content.read(1):
+            raise ValueError(f"Cannot restore pipe with content")
+    if clobber_existing:
+        if child_path.is_symlink():
+            child_path.unlink()
+        elif child_path.is_fifo():
+            return
+        elif child_path.exists():
+            child_path.unlink()
+    elif child_path.is_fifo():
+        return
+    os.mkfifo(child_path)
+
+
 class LocalDirectoryExplorer(protocol.DirectoryExplorer):
 
     _EXCLUDED_DIR_INODE = protocol.Inode(
@@ -133,6 +182,13 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         protocol.FileType.REGULAR,
         protocol.FileType.LINK,
         protocol.FileType.PIPE,
+    }
+
+    _RESTORE_TYPES = {
+        protocol.FileType.DIRECTORY: _restore_directory,
+        protocol.FileType.REGULAR: _restore_regular,
+        protocol.FileType.LINK: _restore_link,
+        protocol.FileType.PIPE: _restore_pipe,
     }
 
     def __init__(self, base_path: Path,
@@ -154,15 +210,28 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                 child = self._base_path / child_name
                 if exception.filter_type is protocol.FilterType.INCLUDE:
                     # Exception to include this child.
-                    if not self._should_pattern_ignore(child) and child.exists():
+                    if not self._should_pattern_ignore(child):
+                        logger.warning(f"File explicitly included but then excluded by pattern %s", child)
+                    elif child.exists():
                         yield child_name, self._stat_child(child_name)
                 elif child.is_dir():
                     # Looks like there is a child of the child that's the real exception.
                     yield child_name, self._EXCLUDED_DIR_INODE.copy()
                 else:
-                    logger.warning("Something was included inside %s has been included, but it could not be backed up",
-                                    child)
-                    yield child_name, self._EXCLUDED_DIR_INODE.copy()
+                    # This is an edge case.  An INCLUDE filter can be made for a child directory where the parent is
+                    # not actually a directory.  Remember filters can name files that don't actually exist.
+                    # Lets say the user EXCLUDEs /foo and INCLUDEs /foo/bar/baz in filters.
+                    # Then the user creates a file (not directory) named /foo/bar ... What are we supposed to do now?
+                    # Let's warn the user they've been a bit stupid and do NOT backup /foo/bar in any way.
+                    # That's because at this point we know /foo/bar is excluded and /foo/bar/baz doesn't exist.
+                    child_exception = exception
+                    meaningful_name = self._base_path / child_name
+                    while child_exception.filter_type is not protocol.FilterType.INCLUDE:
+                        meaningful_name = meaningful_name / next(iter(exception.exceptions.keys()))
+                        child_exception = child_exception.exceptions[meaningful_name.name]
+
+                    logger.warning("%s was included but %s is actually a file!  Ignoring filters under %s",
+                                   meaningful_name, self._base_path / child_name, self._base_path / child_name)
 
         elif self._filter_node is None or self._filter_node.filter_type is protocol.FilterType.INCLUDE:
             for child in self._base_path.iterdir():
@@ -181,17 +250,19 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
                     continue
 
                 if self._should_pattern_ignore(child):
+                    logger.debug("Skipping file for pattern %s", child)
                     continue
 
                 inode = self._stat_child(child_name)
                 if inode.type not in self._INCLUDED_FILE_TYPES:
+                    logger.debug("Skipping %s for type %s", child, inode.type)
                     continue
 
                 yield child.name, inode
 
         else:
             raise ValueError(f"Normalized filter node had type {self._filter_node.filter_type}.  "
-                             f"This should have been one either {protocol.FilterType.INCLUDE} or"
+                             f"This should have been one either {protocol.FilterType.INCLUDE} or "
                              f"{protocol.FilterType.EXCLUDE}")
 
     def _should_pattern_ignore(self, child: Path) -> bool:
@@ -203,10 +274,10 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         return False
 
     def _stat_child(self, child: str) -> protocol.Inode:
-        file_path = self._base_path / child
         inode = self._children.get(child)
         if inode is not None:
             return inode
+        file_path = self._base_path / child
         file_stat = file_path.lstat()
         inode = self._all_files.get((file_stat.st_dev, file_stat.st_ino))
         if inode is None:
@@ -232,13 +303,13 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         child_type = self._stat_child(name).type
         child_path = self._base_path / name
 
-        if child_type == protocol.FileType.REGULAR:
-            return AsyncFile(child_path, 'rb')
+        if child_type is protocol.FileType.REGULAR:
+            return AsyncFile(child_path, 'r')
 
-        if child_type == protocol.FileType.LINK:
+        if child_type is protocol.FileType.LINK:
             return BytesReader(os.readlink(child_path).encode())
 
-        elif child_type == protocol.FileType.PIPE:
+        elif child_type is protocol.FileType.PIPE:
             return BytesReader(bytes(0))
 
         raise ValueError(f"Cannot open child of type {child_type}")
@@ -251,52 +322,9 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
             raise ValueError(f"Cannot restore file of type {type_}")
 
         child_path = self._base_path / name
+        self._children.pop(name, None)
         await restore_function(child_path=child_path, content=content, clobber_existing=clobber_existing)
 
-    @staticmethod
-    async def _restore_directory(child_path: Path, content: Optional[protocol.FileReader], clobber_existing: bool):
-        logger.info(f"Restoring directory {child_path}")
-        if clobber_existing and child_path.is_symlink():
-            child_path.unlink()
-        if content is not None:
-            raise ValueError("Content cannot be supplied for directory")
-        child_path.mkdir(parents=False, exist_ok=True)
-
-    @staticmethod
-    async def _restore_regular(child_path: Path, content: Optional[protocol.FileReader], clobber_existing: bool):
-        if clobber_existing and child_path.is_symlink() or child_path.is_file():
-            child_path.unlink()
-        with AsyncFile(child_path, 'w') as file:
-            bytes_read = await content.read(protocol.READ_SIZE)
-            while bytes_read:
-                await file.write(bytes_read)
-
-    @staticmethod
-    async def _restore_link(child_path: Path, content: Optional[protocol.FileReader],  clobber_existing: bool):
-        logger.info(f"Restoring symbolic link {child_path}")
-        if clobber_existing and child_path.is_symlink():
-            logger.debug(f"Removing existing link")
-            child_path.unlink()
-        link_content = await content.read(protocol.READ_SIZE)
-        extra_bytes = await content.read(protocol.READ_SIZE)
-        while extra_bytes:
-            link_content += extra_bytes
-            extra_bytes = await content.read(protocol.READ_SIZE)
-
-        os.symlink(src=child_path, dst=link_content)
-
-    @staticmethod
-    async def _restore_pipe(child_path: Path, content: Optional[protocol.FileReader],  clobber_existing: bool):
-        logger.info(f"Restoring child {child_path}")
-        if content is not None:
-            if content.read(1):
-                raise ValueError(f"Cannot restore link with content")
-        if clobber_existing:
-            if child_path.is_symlink():
-                child_path.unlink()
-            elif child_path.is_fifo():
-                return
-        os.mkfifo(child_path)
 
     async def restore_meta(self, child: str, meta: protocol.Inode, toggle: Dict[str,bool]):
         child_path = self._base_path / child
@@ -330,13 +358,6 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
             return str(self._base_path)
         return str(self._base_path / name)
 
-    _RESTORE_TYPES = {
-        protocol.FileType.DIRECTORY: _restore_directory,
-        protocol.FileType.REGULAR: _restore_regular,
-        protocol.FileType.LINK: _restore_link,
-        protocol.FileType.PIPE: _restore_pipe,
-    }
-
 
 class LocalFileSystemExplorer:
     _all_files: Dict[Tuple[int, int], protocol.Inode]
@@ -344,11 +365,14 @@ class LocalFileSystemExplorer:
     def __init__(self):
         self._all_files = {}
 
-    def __call__(self, directory_root: str, filters: Iterable[protocol.Filter] = ()) -> LocalDirectoryExplorer:
+    def __call__(self, directory_root: Union[str, Path],
+                 filters: Iterable[protocol.Filter] = ()) -> LocalDirectoryExplorer:
 
         base_path = Path(directory_root)
 
         if not base_path.is_dir():
+            if not base_path.exists():
+                raise FileNotFoundError(f"Backup path doesn't exist: {base_path}")
             raise ValueError(f"Backup path is not a directory: {base_path}")
         ignore_patterns, root_filter_node = file_filter.normalize_filters(filters)
         return LocalDirectoryExplorer(

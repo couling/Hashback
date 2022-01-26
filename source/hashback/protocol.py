@@ -44,7 +44,7 @@ class Inode(BaseModel):
         (FileType.CHARACTER_DEVICE, stat.S_ISCHR),
         (FileType.BLOCK_DEVICE, stat.S_ISBLK),
         (FileType.SOCKET, stat.S_ISSOCK),
-        (FileType.PIPE, stat.S_ISPORT),
+        (FileType.PIPE, stat.S_ISFIFO),
         (FileType.LINK, stat.S_ISLNK),
     ]
 

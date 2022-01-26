@@ -25,6 +25,7 @@ def normalize_filters(filters: Iterable[protocol.Filter]) -> Tuple[List[str], Fi
 
 
 def _build_tree(tree_root: FilterPathNode, patterns: List[str], filters: Iterable[protocol.Filter]):
+    # TODO This somehow needs to work with non system URLS.  Think S3 urls from a Windows Box!
     for filter_item in filters:
         if filter_item.filter is protocol.FilterType.PATTERN_EXCLUDE:
             patterns.append(filter_item.path)
