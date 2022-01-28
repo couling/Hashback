@@ -7,4 +7,6 @@ test_db
 .eggs
 .venv
 dist
+build
+deb_dist
 .DS_Store
