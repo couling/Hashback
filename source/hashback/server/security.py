@@ -26,6 +26,7 @@ class SimpleAuthorization:
         self.global_permissions = global_permissions
 
     def __call__(self, device_id: Optional[UUID], action: Action):
+        # TODO actually use this
         if device_id == self.client_id:
             if action not in self.self_permissions:
                 raise AccessDeniedException(

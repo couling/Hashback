@@ -2,8 +2,6 @@ import logging.config
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
-import gzip
-import base64
 
 import click
 from pydantic import BaseSettings, root_validator

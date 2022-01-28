@@ -124,6 +124,10 @@ class ListBackup(BaseModel):
     __root__: List[BackupDescription]
 
 
+class AuthenticationFailedException(protocol.RequestException):
+    http_status = 401
+
+
 HELLO = Endpoint('GET', '/', None, ServerVersion)
 
 # User Session

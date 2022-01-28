@@ -35,6 +35,10 @@ class LocalDatabase:
         self._base_path = base_path
         self.config = Configuration.parse_file(base_path / _CONFIG_FILE)
 
+    @property
+    def path(self) -> Path:
+        return self._base_path
+
     def save_config(self):
         with (self._base_path / _CONFIG_FILE).open('w') as file:
             file.write(self.config.json(indent=True))
