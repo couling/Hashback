@@ -4,9 +4,10 @@ from pathlib import Path
 import click
 
 from .. import protocol
-from ..local_database import LocalDatabase, Configuration
-from ..misc import register_clean_shutdown
+from ..local_database import Configuration, LocalDatabase
 from ..log_config import setup_logging
+from ..misc import register_clean_shutdown
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +30,15 @@ def click_main(ctx: click.Context, database: Path):
 
 
 @click_main.command('create')
-@click.option("--backup-by", type=click.Choice(['date', 'timestamp'], case_sensitive=False), default="date")
-@click.option("--friendly-links/--flat", default=True)
 @click.option("--store-split-count", type=click.INT, default=2)
 @click.pass_obj
 def create(database: Path, **db_config):
     config = Configuration(**db_config)
     logger.info("Creating database %s", database)
-    LocalDatabase.create_database(base_path=database, configuration=config)
+    try:
+        LocalDatabase.create_database(base_path=database, configuration=config)
+    except FileExistsError as exc:
+        raise click.ClickException(f"Database already exists at {database}") from exc
 
 
 @click_main.command('add-client')

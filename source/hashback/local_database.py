@@ -76,8 +76,8 @@ class LocalDatabase:
 
     @classmethod
     def create_database(cls, base_path: Path, configuration: Configuration) -> "LocalDatabase":
-        base_path.mkdir(exist_ok=False, parents=True)
-        with (base_path / _CONFIG_FILE).open('w') as file:
+        base_path.mkdir(exist_ok=True, parents=True)
+        with (base_path / _CONFIG_FILE).open('x') as file:
             file.write(configuration.json(indent=True))
         (base_path / cls._STORE_DIR).mkdir(exist_ok=False, parents=True)
         (base_path / cls._CLIENT_DIR).mkdir(exist_ok=False, parents=True)
