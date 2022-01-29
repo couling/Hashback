@@ -5,7 +5,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Union, List, Tuple
+from typing import Optional, Union, List, Tuple, Iterable
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel
@@ -73,6 +73,16 @@ class LocalDatabase:
         with (client_path / _CONFIG_FILE).open('w') as file:
             file.write(client_config.json(indent=True))
         return LocalDatabaseServerSession(self, client_path)
+
+    def iter_clients(self) -> Iterable[protocol.ClientConfiguration]:
+        clients = set()
+        for file in (self._base_path / self._CLIENT_DIR).iterdir():
+            while file.is_symlink():
+                file = file.readlink()
+            if file.is_dir() and (file / _CONFIG_FILE).is_file():
+                clients.add(file)
+        for client in clients:
+            yield protocol.ClientConfiguration.parse_file(client / _CONFIG_FILE)
 
     @classmethod
     def create_database(cls, base_path: Path, configuration: Configuration) -> "LocalDatabase":

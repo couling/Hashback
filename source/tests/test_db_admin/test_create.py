@@ -2,8 +2,9 @@ from pathlib import Path
 
 import click.testing
 import pytest
+
 from hashback.db_admin import db_admin
-from hashback.local_database import LocalDatabase, Configuration
+from hashback.local_database import LocalDatabase
 
 
 def create_db(path: Path, *args: str, exit_code: int = 0):
