@@ -1,21 +1,20 @@
 # pylint: disable=redefined-outer-name
 """
-Note: These tests are all intended to test both the client and server.  Primarily they are pass-through tests which show
-that a call on the client will result in a similar call to the underlying database server side.
+Note: These tests are all intended to test both the client and server.
+They are pass-through tests which show that a call on the client will result in a similar call to the underlying
+database server side.
 """
 import asyncio
-import os
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
 
 from hashback import protocol
 from hashback.http_client import ClientSession
-from hashback.protocol import ClientConfiguration, BackupSession
+from hashback.protocol import BackupSession, ClientConfiguration
 from .constants import EXAMPLE_DIR, EXAMPLE_DIR_INODE
 
 

@@ -1,11 +1,10 @@
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Union, Optional, List, Tuple
+from typing import List, Optional, Tuple, Union
 from uuid import UUID, uuid4
 
 from hashback import protocol
-from hashback.protocol import Backup, Inode, FileReader, Directory, DirectoryDefResponse, BackupSessionConfig, \
-    BackupSession, ClientConfiguration
+from hashback.protocol import Backup, BackupSession, BackupSessionConfig, ClientConfiguration, Directory, \
+    DirectoryDefResponse, FileReader, Inode
 
 
 class MockServerSession(protocol.ServerSession):
@@ -47,8 +46,7 @@ class MockServerSession(protocol.ServerSession):
     async def get_directory(self, inode: Inode) -> Directory:
         pass
 
-    async def get_file(self, inode: Inode, target_path: Optional[Path] = None, restore_permissions: bool = False,
-                       restore_owner: bool = False) -> Optional[FileReader]:
+    async def get_file(self, inode: Inode) -> Optional[FileReader]:
         raise NotImplementedError()
 
 

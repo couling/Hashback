@@ -130,11 +130,11 @@ def list_backups(**options):
 
     async def _list():
         logger.info(f"Listing backups for {client.client_config.client_name} ({client.client_config.client_id})")
-        tz = client.client_config.timezone
-        backups = sorted(((backup_date.astimezone(tz), description)
+        tz_info = client.client_config.timezone
+        backups = sorted(((backup_date.astimezone(tz_info), description)
                           for backup_date, description in await client.list_backups()), key=lambda item: item[0])
         if options['json']:
-            result = [{'date_time': backup_date.astimezone(tz).isoformat(), 'description': description}
+            result = [{'date_time': backup_date.astimezone(tz_info).isoformat(), 'description': description}
                       for backup_date, description in backups]
             print(json.dumps(result))
         else:
@@ -153,8 +153,8 @@ def list_backups(**options):
 @click.option("--json/--plain", default=False)
 def describe(timestamp: datetime, **options):
     client: ServerSession = click.get_current_context().obj
-    def _timezone_string(t: datetime):
-        return t.astimezone(client.client_config.timezone).isoformat()
+    def _timezone_string(timestamp_: datetime):
+        return timestamp_.astimezone(client.client_config.timezone).isoformat()
 
     async def _describe():
         result: Backup = await client.get_backup(timestamp)

@@ -156,7 +156,7 @@ class Check:
                         bad.add(path)
                         return False
 
-        except Exception as error:
+        except OSError as error:
             logger.error(f"Bad File {path}: {str(error)}")
             really_bad.add(path)
             bad.add(path)

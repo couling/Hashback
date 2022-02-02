@@ -1,12 +1,10 @@
-from pathlib import Path
+# pylint: disable=redefined-outer-name
 from pathlib import Path
 from typing import Optional
 from uuid import UUID, uuid4
-import logging
+
 import click.testing
 import pytest
-import io
-import json
 
 from hashback import http_protocol, protocol
 from hashback.basic_auth import server
@@ -67,8 +65,7 @@ def specified_user(request, client_id: UUID) -> str:
     use_id = request.param
     if use_id:
         return str(client_id)
-    else:
-        return CLIENT_NAME
+    return CLIENT_NAME
 
 
 def credentials_from_output(output: str) -> http_protocol.Credentials:
@@ -76,8 +73,7 @@ def credentials_from_output(output: str) -> http_protocol.Credentials:
     for line in output:
         if line.startswith('{'):
             return http_protocol.Credentials.parse_raw(line)
-    else:
-        raise RuntimeError("Credentials not found in output")
+    raise RuntimeError("Credentials not found in output")
 
 
 @pytest.mark.parametrize('extra', ('--display-credentials','--hide-credentials'))
@@ -118,7 +114,7 @@ def test_authorize_user_hide_credentials(run_cli, client_id: UUID):
 
 
 @pytest.mark.asyncio
-def test_authorize_user_show_credentials(run_cli, basic_auth_db: BasicAuthDb, client_id: UUID, specified_user:str):
+def test_authorize_user_show_credentials(run_cli, client_id: UUID, specified_user:str):
     password = str(uuid4())
     result = run_cli('authorize', specified_user, password, '--display-credentials')
     credentials = credentials_from_output(result.output)

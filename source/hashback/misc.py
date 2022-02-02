@@ -1,15 +1,15 @@
 import asyncio
-import os
-
-import appdirs
 import collections.abc
 import functools
 import json
 import logging
+import os
 import signal
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Collection, Coroutine, Dict, Optional, Union
+
+import appdirs
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class SettingsConfig:
         try:
             with file_path.open('r') as settings_file:
                 result = json.load(settings_file)
-        except Exception as exc:
+        except OSError as exc:
             logger.warning(f"Could not load {file_path}: ({str_exception(exc)}))")
             result = {}
         result['config_path'] = file_path

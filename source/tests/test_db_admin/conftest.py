@@ -1,11 +1,12 @@
-import pytest
+# pylint: disable=redefined-outer-name
 from pathlib import Path
-
-import click.testing
 from typing import Optional
 
-from hashback.local_database import LocalDatabase, Configuration
+import click.testing
+import pytest
+
 from hashback.db_admin import db_admin
+from hashback.local_database import Configuration, LocalDatabase
 
 
 @pytest.fixture()

@@ -1,3 +1,4 @@
+# pylint: disable=redefined-outer-name
 from dataclasses import dataclass, field
 from typing import Dict
 from uuid import UUID, uuid4

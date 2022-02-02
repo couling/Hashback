@@ -1,3 +1,4 @@
+# pylint: disable=protected-access
 import datetime
 import itertools
 import os
@@ -22,7 +23,7 @@ async def test_simple_read_file(tmp_path: Path):
     result_bytes = bytes()
     with AsyncFile(test_file, 'r') as file:
         assert file.file_size == len(random_bytes)
-        for i in range(3):
+        for _ in range(3):
             # This deliberately cuts the content to check the reader buffers correctly.
             result_bytes += await file.read(100)
 
@@ -203,9 +204,10 @@ async def test_reuse_inode(tmp_path: Path):
     async for _, inode2 in explorer.iter_children():
         break
     else:
-        raise "File not found"
+        assert False, "File not found"
 
     # What should happen here is that the same file object will be returned because it's the same inode
+    # pylint: disable=undefined-loop-variable
     assert inode is inode2
 
 

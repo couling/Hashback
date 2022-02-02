@@ -130,9 +130,9 @@ async def _restore_directory(child_path: Path, content: Optional[protocol.FileRe
 async def _restore_regular(child_path: Path, content: Optional[protocol.FileReader], clobber_existing: bool):
     if clobber_existing and (child_path.is_symlink() or child_path.exists()):
         # This deliberately will fail if the child is a directory. We don't want want to remove an entire directory tree
-        logger.debug(f"Removing original %s", child_path)
+        logger.debug("Removing original %s", child_path)
         child_path.unlink()
-    logger.info(f"Restoring file {child_path}")
+    logger.info("Restoring file %s", child_path)
     with AsyncFile(child_path, 'x') as file:
         bytes_read = await content.read(protocol.READ_SIZE)
         while bytes_read:
@@ -154,10 +154,10 @@ async def _restore_link(child_path: Path, content: Optional[protocol.FileReader]
 
 
 async def _restore_pipe(child_path: Path, content: Optional[protocol.FileReader],  clobber_existing: bool):
-    logger.info(f"Restoring child {child_path}")
+    logger.info("Restoring child %s", child_path)
     if content is not None:
         if await content.read(1):
-            raise ValueError(f"Cannot restore pipe with content")
+            raise ValueError("Cannot restore pipe with content")
     if clobber_existing:
         if child_path.is_symlink():
             child_path.unlink()

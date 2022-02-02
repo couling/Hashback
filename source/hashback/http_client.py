@@ -1,21 +1,19 @@
 import abc
 import asyncio
+import json
+import logging
 from concurrent.futures import Executor, ThreadPoolExecutor
 from datetime import datetime
 from io import BytesIO
-from os import SEEK_SET, SEEK_END
-from pathlib import Path
-from typing import Optional, BinaryIO, Union, Protocol, Any, Dict, List, Tuple
+from os import SEEK_END, SEEK_SET
+from typing import Any, BinaryIO, Dict, List, Optional, Protocol, Tuple, Union
 from uuid import UUID
-import json
-import logging
 
 import requests.auth
 
-from . import protocol, http_protocol
-from .protocol import Inode, Directory, DirectoryDefResponse, Backup, BackupSession, ClientConfiguration, \
-    BackupSessionConfig
-
+from . import http_protocol, protocol
+from .protocol import Backup, BackupSession, BackupSessionConfig, ClientConfiguration, Directory, \
+    DirectoryDefResponse, Inode
 
 logger = logging.getLogger(__name__)
 

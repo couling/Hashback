@@ -73,9 +73,8 @@ class BackupController:
         directory_definition = await self._scan_directory(explorer, last_backup)
         if last_backup is None or last_backup.hash != directory_definition.definition.hash():
             return await self._upload_directory(explorer, directory_definition)
-        else:
-            logger.debug(f"Skipping %s directory not changed", explorer.get_path(None))
-            return last_backup.hash
+        logger.debug("Skipping %s directory not changed", explorer.get_path(None))
+        return last_backup.hash
 
 
     async def _scan_directory(self, explorer: protocol.DirectoryExplorer,
@@ -87,7 +86,7 @@ class BackupController:
             last_backup_children = {}
 
         children = {}
-        child_directories = {} if self.full_prescan else None
+        child_directories = {}
         async for child_name, child_inode in explorer.iter_children():
             if child_inode.type is protocol.FileType.DIRECTORY:
                 # Two major modes of operation which change the pattern of how this code recurses through directories.
@@ -130,7 +129,7 @@ class BackupController:
 
         return ScanResult(
             definition=protocol.Directory(__root__=children),
-            child_scan_results=child_directories,
+            child_scan_results=child_directories if self.full_prescan else None,
         )
 
 
