@@ -4,7 +4,7 @@ from pathlib import Path
 import click
 
 from .. import protocol
-from ..local_database import Configuration, LocalDatabase
+from ..local_database import LocalDatabase
 from ..log_config import setup_logging
 from ..misc import register_clean_shutdown
 
@@ -33,7 +33,7 @@ def click_main(ctx: click.Context, database: Path):
 @click.option("--store-split-count", type=click.INT, default=2)
 @click.pass_obj
 def create(database: Path, **db_config):
-    config = Configuration(**db_config)
+    config = LocalDatabase.Configuration(**db_config)
     logger.info("Creating database %s", database)
     try:
         LocalDatabase.create_database(base_path=database, configuration=config)
@@ -50,8 +50,8 @@ def add_client(database: LocalDatabase, client_name: str):
     )
     try:
         database.create_client(config)
-    except FileExistsError as exc:
-        raise click.ClickException(f"Client '{client_name}' already exists")
+    except FileExistsError as ex:
+        raise click.ClickException(f"Client '{client_name}' already exists") from ex
     logger.info("Created client %s", config.client_id)
 
 

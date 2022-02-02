@@ -8,13 +8,13 @@ from uuid import uuid4
 import pytest
 
 from hashback import protocol
-from hashback.local_database import LocalDatabase, LocalDatabaseServerSession, Configuration, LocalDatabaseBackupSession
+from hashback.local_database import LocalDatabase, LocalDatabaseServerSession, LocalDatabaseBackupSession
 from hashback.protocol import ClientConfiguration, Backup, Inode, Directory, FileType, SessionClosed
 
 
 @pytest.fixture(scope='function')
-def local_database_configuration() -> Configuration:
-    return Configuration(
+def local_database_configuration() -> LocalDatabase.Configuration:
+    return LocalDatabase.Configuration(
         store_split_count=1,
         store_split_size=2,
     )

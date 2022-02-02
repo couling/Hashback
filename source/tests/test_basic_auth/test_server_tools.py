@@ -9,7 +9,7 @@ import pytest
 from hashback import http_protocol, protocol
 from hashback.basic_auth import server
 from hashback.basic_auth.basic_auth import BasicAuthDb
-from hashback.local_database import Configuration as LocalDbConfig, LocalDatabase
+from hashback.local_database import LocalDatabase
 
 CLIENT_NAME = 'test_client'
 
@@ -44,7 +44,7 @@ def configuration(tmp_path: Path, basic_auth_db_path: Path, local_db: LocalDatab
 @pytest.fixture()
 def local_db(tmp_path: Path) -> LocalDatabase:
     db_path = tmp_path / 'db'
-    LocalDatabase.create_database(db_path, LocalDbConfig())
+    LocalDatabase.create_database(db_path, LocalDatabase.Configuration())
     return LocalDatabase(db_path)
 
 

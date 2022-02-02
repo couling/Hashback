@@ -202,68 +202,76 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         self._filter_node = filter_node
         self._children = {}
 
-    async def iter_children(self) -> AsyncIterable[Tuple[str, protocol.Inode]]:
-        if self._filter_node is not None and self._filter_node.filter_type is protocol.FilterType.EXCLUDE:
-            # This LocalDirectoryExplorer has been created for an excluded directory, but there may be exceptions.
-            logger.debug("Listing %s exceptions for %s ", len(self._filter_node.exceptions), self._base_path)
-            for child_name, exception in self._filter_node.exceptions.items():
-                child = self._base_path / child_name
-                if exception.filter_type is protocol.FilterType.INCLUDE:
-                    # Exception to include this child.
-                    if not self._should_pattern_ignore(child):
-                        logger.warning(f"File explicitly included but then excluded by pattern %s", child)
-                    elif child.exists():
-                        yield child_name, self._stat_child(child_name)
-                elif child.is_dir():
-                    # Looks like there is a child of the child that's the real exception.
+    def iter_children(self) -> AsyncIterable[Tuple[str, protocol.Inode]]:
+        if self._filter_node is None or self._filter_node.filter_type is protocol.FilterType.INCLUDE:
+            return self._iter_included_directory()
+        if self._filter_node.filter_type is protocol.FilterType.EXCLUDE:
+            return self._iter_excluded_directory()
+        raise ValueError(f"Normalized filter node had type {self._filter_node.filter_type}. This should have been "
+                         f"either {protocol.FilterType.INCLUDE} or {protocol.FilterType.EXCLUDE}")
+
+    async def _iter_included_directory(self) -> AsyncIterable[Tuple[str, protocol.Inode]]:
+        for child in self._base_path.iterdir():
+            child_name = child.name
+            if self._filter_node is not None and child_name in self._filter_node.exceptions and \
+                    self._filter_node.exceptions[child_name].filter_type is protocol.FilterType.EXCLUDE:
+                # If this child is explicitly excluded ...
+                exception_count = len(self._filter_node.exceptions[child_name].exceptions)
+                if exception_count:
+                    logger.debug("Skipping %s on filter with %s exceptions", child, exception_count)
                     yield child_name, self._EXCLUDED_DIR_INODE.copy()
                 else:
-                    # This is an edge case.  An INCLUDE filter can be made for a child directory where the parent is
-                    # not actually a directory.  Remember filters can name files that don't actually exist.
-                    # Lets say the user EXCLUDEs /foo and INCLUDEs /foo/bar/baz in filters.
-                    # Then the user creates a file (not directory) named /foo/bar ... What are we supposed to do now?
-                    # Let's warn the user they've been a bit stupid and do NOT backup /foo/bar in any way.
-                    # That's because at this point we know /foo/bar is excluded and /foo/bar/baz doesn't exist.
-                    child_exception = exception
-                    meaningful_name = self._base_path / child_name
+                    logger.debug("Skipping %s on filter", child)
+                continue
+
+            if self._should_pattern_ignore(child):
+                logger.debug("Skipping file for pattern %s", child)
+                continue
+
+            inode = self._stat_child(child_name)
+            if inode.type not in self._INCLUDED_FILE_TYPES:
+                logger.debug("Skipping %s for type %s", child, inode.type)
+                continue
+
+            yield child.name, inode
+
+    async def _iter_excluded_directory(self) -> AsyncIterable[Tuple[str, protocol.Inode]]:
+        # This LocalDirectoryExplorer has been created for an excluded directory, but there may be exceptions.
+        logger.debug("Listing %s exceptions for %s ", len(self._filter_node.exceptions), self._base_path)
+        for child_name, exception in self._filter_node.exceptions.items():
+            child = self._base_path / child_name
+            if exception.filter_type is protocol.FilterType.INCLUDE:
+                # Exception to include this child.
+                if not self._should_pattern_ignore(child):
+                    logger.warning("File explicitly included but then excluded by pattern %s", child)
+                elif child.exists():
+                    yield child_name, self._stat_child(child_name)
+            elif child.is_dir():
+                # Looks like there is a child of the child that's the real exception.
+                yield child_name, self._EXCLUDED_DIR_INODE.copy()
+            elif exception.exceptions:
+                # This is an edge case.  An INCLUDE filter can be made for a child directory where the parent is
+                # not actually a directory.  Remember filters can name files that don't actually exist.
+                # Lets say the user EXCLUDEs /foo and INCLUDEs /foo/bar/baz in filters.
+                # Then the user creates a file (not directory) named /foo/bar ... What are we supposed to do now?
+                # Let's warn the user they've been a bit stupid and do NOT backup /foo/bar in any way.
+                # That's because at this point we know /foo/bar is excluded and /foo/bar/baz doesn't exist.
+                child_exception = exception
+                meaningful_name = self._base_path / child_name
+                try:
                     while child_exception.filter_type is not protocol.FilterType.INCLUDE:
                         meaningful_name = meaningful_name / next(iter(exception.exceptions.keys()))
                         child_exception = child_exception.exceptions[meaningful_name.name]
 
                     logger.warning("%s was included but %s is actually a file!  Ignoring filters under %s",
                                    meaningful_name, self._base_path / child_name, self._base_path / child_name)
-
-        elif self._filter_node is None or self._filter_node.filter_type is protocol.FilterType.INCLUDE:
-            for child in self._base_path.iterdir():
-                child_name = child.name
-
-
-                if self._filter_node is not None and child_name in self._filter_node.exceptions and \
-                        self._filter_node.exceptions[child_name].filter_type is protocol.FilterType.EXCLUDE:
-                    # If this child is explicitly excluded ...
-                    exception_count = len(self._filter_node.exceptions[child_name].exceptions)
-                    if exception_count:
-                        logger.debug("Skipping %s on filter with %s exceptions", child, exception_count)
-                        yield child_name, self._EXCLUDED_DIR_INODE.copy()
-                    else:
-                        logger.debug("Skipping %s on filter", child)
-                    continue
-
-                if self._should_pattern_ignore(child):
-                    logger.debug("Skipping file for pattern %s", child)
-                    continue
-
-                inode = self._stat_child(child_name)
-                if inode.type not in self._INCLUDED_FILE_TYPES:
-                    logger.debug("Skipping %s for type %s", child, inode.type)
-                    continue
-
-                yield child.name, inode
-
-        else:
-            raise ValueError(f"Normalized filter node had type {self._filter_node.filter_type}.  "
-                             f"This should have been one either {protocol.FilterType.INCLUDE} or "
-                             f"{protocol.FilterType.EXCLUDE}")
+                except StopIteration:
+                    # This clause really should never occur.  Meaningless exceptions are supposed to be pruned...
+                    # We are currently on an EXCLUDE which has exceptions so there should be an INCLUDE in it's
+                    # children.  But let's not break just because we failed to write a more meaningful warning.
+                    logger.warning("%s/.../%s was included but %s is actually a file!  Ignoring filters under %s",
+                                   self._base_path, child_name, self._base_path / child_name,
+                                   self._base_path / child_name)
 
     def _should_pattern_ignore(self, child: Path) -> bool:
         child_name = child.name
@@ -309,7 +317,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         if child_type is protocol.FileType.LINK:
             return BytesReader(os.readlink(child_path).encode())
 
-        elif child_type is protocol.FileType.PIPE:
+        if child_type is protocol.FileType.PIPE:
             return BytesReader(bytes(0))
 
         raise ValueError(f"Cannot open child of type {child_type}")
@@ -319,15 +327,15 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
         try:
             restore_function = self._RESTORE_TYPES[type_]
         except KeyError:
-            raise ValueError(f"Cannot restore file of type {type_}")
+            raise ValueError(f"Cannot restore file of type {type_}") from None
 
         child_path = self._base_path / name
         self._children.pop(name, None)
         await restore_function(child_path=child_path, content=content, clobber_existing=clobber_existing)
 
 
-    async def restore_meta(self, child: str, meta: protocol.Inode, toggle: Dict[str,bool]):
-        child_path = self._base_path / child
+    async def restore_meta(self, name: str, meta: protocol.Inode, toggle: Dict[str,bool]):
+        child_path = self._base_path / name
         if toggle.get('mode', True):
             os.chmod(child_path, mode=meta.mode, follow_symlinks=False)
 

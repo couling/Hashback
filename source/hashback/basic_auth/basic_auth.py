@@ -125,7 +125,7 @@ class BasicAuthenticatorAuthorizer:
             credentials: fastapi.security.HTTPBasicCredentials = await self._request_parser(request)
         except HTTPException as ex:
             if ex.status_code == 401:
-                raise AuthenticationFailedException(f"Could not authenticate user (unknown)") from ex
+                raise AuthenticationFailedException("Could not authenticate user (unknown)") from ex
             raise
         self._auth_db.authenticate(credentials.username, credentials.password)
         # TODO map usernames onto client_id and remove the requirement to have username==client_id

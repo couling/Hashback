@@ -58,7 +58,7 @@ class Check:
 
     def _all_files(self, path: Path = None, level: int = None, expect_prefix: str = '') -> Iterable[Path]:
         if path is None:
-            path = self._database._base_path / self._database._STORE_DIR
+            path = self._database.path / local_database.STORE_DIR
             level = self._database.config.store_split_count
         if level > 0:
             for child in sorted(path.iterdir()):
@@ -78,7 +78,7 @@ class Check:
                 file = next(iterator)
                 active_tasks[asyncio.create_task(coroutine(file))] = file
             while True:
-                done, pending = await asyncio.wait(active_tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait(active_tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     item = active_tasks.pop(task)
                     if not task.result():
@@ -105,8 +105,8 @@ class Check:
         logger.debug(f"Checking {file_path}")
         file_hash = await asyncio.get_running_loop().run_in_executor(self._executor, self.hash_file, file_path)
         file_name = file_path.name
-        if file_name.endswith(local_database.LocalDatabaseServerSession._DIR_SUFFIX):
-            file_name = file_name[:-len(local_database.LocalDatabaseServerSession._DIR_SUFFIX)]
+        if file_name.endswith(local_database.DIR_SUFFIX):
+            file_name = file_name[:-len(local_database.DIR_SUFFIX)]
         if file_hash != file_name:
             logger.error(f"Incorrect file hash; possible bitrot for file {file_path} - calculated has {file_hash}")
             return False
@@ -144,12 +144,12 @@ class Check:
             return False
 
         try:
-            if path.name.endswith(local_database.LocalDatabaseServerSession._DIR_SUFFIX):
+            if path.name.endswith(local_database.DIR_SUFFIX):
                 logger.debug(f"Checking {path}")
                 directory = protocol.Directory.parse_file(path)
                 for inode in directory.children.values():
                     if inode.type is protocol.FileType.DIRECTORY:
-                        ref_hash = inode.hash + local_database.LocalDatabaseServerSession._DIR_SUFFIX
+                        ref_hash = inode.hash + local_database.DIR_SUFFIX
                     else:
                         ref_hash = inode.hash
                     if not self._verify_dir(self._database.store_path_for(ref_hash), verified, bad, really_bad):

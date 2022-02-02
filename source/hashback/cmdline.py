@@ -13,7 +13,7 @@ from .algorithms import BackupController
 from .local_file_system import LocalFileSystemExplorer
 from .log_config import LogConfig, flush_early_logging, setup_early_logging
 from .misc import SettingsConfig, register_clean_shutdown, run_then_cancel
-from .protocol import Backup, DuplicateBackup, ServerSession
+from .protocol import Backup, DuplicateBackup, ServerSession, DEFAULT_ENCODING
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def configure(config_path: Optional[Path], user: bool, log_level: Optional[str],
 
     for item in log_unit_level:
         log_unit, level = item.split('=', 1)
-        new_settings.logging.log_unit_levels = level
+        new_settings.logging.log_unit_levels[log_unit] = level
 
     logging.config.dictConfig(new_settings.logging.dict_config())
     flush_early_logging()
@@ -76,7 +76,7 @@ def configure(config_path: Optional[Path], user: bool, log_level: Optional[str],
 
     logger.info(f"Saving settings to {config_path}")
     config_path.touch(mode=0o600, exist_ok=True)
-    with config_path.open('w') as file:
+    with config_path.open('w', encoding=DEFAULT_ENCODING) as file:
         file.write(new_settings.json(indent=True, exclude_defaults=True))
 
 
@@ -139,7 +139,7 @@ def list_backups(**options):
             print(json.dumps(result))
         else:
             if backups:
-                print(f"Backup Date/time\tDescription")
+                print("Backup Date/time\tDescription")
                 for backup_date, description in backups:
                     print(f"{backup_date}\t{description}")
             else:
@@ -164,7 +164,7 @@ def describe(timestamp: datetime, **options):
             print(f"{_timezone_string(result.backup_date)}: {result.description}")
             print(f"Started: {_timezone_string(result.started)}")
             print(f"Finished: {_timezone_string(result.completed)}")
-            print(f"Roots: {[name for name in result.roots.keys()]}")
+            print(f"Roots: {list(result.roots.keys())}")
 
     run_then_cancel(_describe())
 
@@ -182,11 +182,10 @@ class Settings(BaseSettings):
 
 def create_client(settings: Settings) -> ServerSession:
     url = urlparse(settings.database_url)
-    if url.scheme == '' or url.scheme == 'file':
+    if url.scheme in ('', 'file'):
         return _create_local_client(settings)
-    if url.scheme == 'http' or url.scheme =='https':
+    if url.scheme in ('http', 'https'):
         return _create_http_client(settings)
-
     raise ValueError(f"Unknown scheme {url.scheme}")
 
 
@@ -228,4 +227,6 @@ def _create_http_client(settings: Settings):
 
 
 if __name__ == '__main__':
+    # Pylint does not understand click
+    # pylint: disable=no-value-for-parameter
     main()

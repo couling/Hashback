@@ -6,7 +6,7 @@ import click.testing
 import pytest
 
 from hashback.db_admin import db_admin
-from hashback.local_database import Configuration, LocalDatabase
+from hashback.local_database import LocalDatabase
 
 
 @pytest.fixture()
@@ -24,5 +24,5 @@ def cli_runner(local_db_path: Path):
 @pytest.fixture()
 def local_db_path(tmp_path: Path) -> Path:
     db_path = tmp_path / 'db'
-    LocalDatabase.create_database(db_path, Configuration())
+    LocalDatabase.create_database(db_path, LocalDatabase.Configuration())
     return db_path

@@ -269,6 +269,7 @@ class RestoreController:
 
             # source_child WILL have been set.
             # split() never returns the empty set so the above for loop must have executed at least once
+            # pylint: disable=undefined-loop-variable
             await self.restore_file(backup_root, target_dir, source_child)
 
         else:
@@ -301,7 +302,7 @@ class RestoreController:
         :param child_name: The name to give the file or directory inside target_dir.
         """
         if self.check_meta_before_overwrite:
-            # TODO
+            # TODO Check meta before overwrite and not
             raise NotImplementedError("Checking meta has not been implemented yet")
 
         if inode.type is protocol.FileType.DIRECTORY:
@@ -315,5 +316,5 @@ class RestoreController:
             await target_dir.restore_meta(child_name, inode, self.restore_meta_toggles)
 
     async def _delete_new(self, directory: Iterable[str], target_dir: protocol.DirectoryExplorer):
-        # TODO
-        raise NotImplementedError(f"Deleting files has not been added to the DirectoryExplorer protocol")
+        # TODO implement deleting files on target during restore
+        raise NotImplementedError("Deleting files has not been added to the DirectoryExplorer protocol")

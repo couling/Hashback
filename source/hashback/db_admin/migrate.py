@@ -11,7 +11,7 @@ import dateutil.tz
 
 from .db_admin import click_main
 from .. import protocol
-from ..local_database import LocalDatabase, LocalDatabaseServerSession
+from ..local_database import LocalDatabase, DIR_SUFFIX
 from ..local_file_system import LocalFileSystemExplorer
 from ..misc import run_then_cancel, str_exception
 
@@ -193,7 +193,7 @@ class Migrator:
                 self.inode_cache[child.inode()] =  child_inode
 
         directory_content = protocol.Directory(__root__=children).hash()
-        ref_hash = directory_content.ref_hash + LocalDatabaseServerSession._DIR_SUFFIX
+        ref_hash = directory_content.ref_hash + DIR_SUFFIX
         if ref_hash not in self.exists_cache:
             target_path = self.database.store_path_for(ref_hash=ref_hash)
             if not target_path.exists():

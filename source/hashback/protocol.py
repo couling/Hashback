@@ -17,6 +17,7 @@ VERSION = "1.0"
 
 EMPTY_FILE = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 READ_SIZE = (1024**2) * 10
+DEFAULT_ENCODING = "utf-8"
 
 class FileType(enum.Enum):
 
@@ -318,7 +319,7 @@ class ServerSession(Protocol):
     @abstractmethod
     def client_config(self) -> ClientConfiguration:
         """
-        Client confic is stored remotely on the server so that it can be centrally managed for all nodes.
+        Client config is stored remotely on the server so that it can be centrally managed for all nodes.
         Clients read this field to discover what they should back up etc.
         """
 

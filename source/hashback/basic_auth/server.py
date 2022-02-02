@@ -6,6 +6,7 @@ from uuid import uuid4
 import click
 from pydantic import BaseSettings, root_validator
 from uvicorn import run
+from uvicorn.config import LOGGING_CONFIG
 
 from . import basic_auth
 from ..http_protocol import Credentials, DEFAULT_PORT
@@ -110,7 +111,6 @@ class Settings(BaseSettings):
 
 
 def configure_logging(settings: Settings) -> Dict[str, Any]:
-    from uvicorn.config import LOGGING_CONFIG
     log_config = LOGGING_CONFIG.copy()
     del log_config['loggers']['uvicorn']['handlers']
     log_config = settings.logging.dict_config(base_logger_dict=log_config)

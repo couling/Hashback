@@ -20,20 +20,25 @@ _CONFIG_FILE = 'config.json'
 logger = logging.getLogger(__name__)
 
 
-class Configuration(BaseModel):
-    store_split_count = 1
-    store_split_size = 2
+__all__ = ['LocalDatabase', 'LocalDatabaseServerSession', 'LocalDatabaseBackupSession']
+
+
+CLIENT_DIR = 'client'
+STORE_DIR = 'store'
+
+DIR_SUFFIX = ".d"
 
 
 class LocalDatabase:
-    config: Configuration
+    class Configuration(BaseModel):
+        store_split_count = 1
+        store_split_size = 2
 
-    _CLIENT_DIR = 'client'
-    _STORE_DIR = 'store'
+    config: Configuration
 
     def __init__(self, base_path: Path):
         self._base_path = base_path
-        self.config = Configuration.parse_file(base_path / _CONFIG_FILE)
+        self.config = self.Configuration.parse_file(base_path / _CONFIG_FILE)
 
     @property
     def path(self) -> Path:
@@ -47,12 +52,12 @@ class LocalDatabase:
         try:
             try:
                 client_id = UUID(client_id_or_name)
-                client_path = self._base_path / self._CLIENT_DIR / str(client_id)
+                client_path = self._base_path / CLIENT_DIR / str(client_id)
             except ValueError:
-                client_path = self._base_path / self._CLIENT_DIR / client_id_or_name
+                client_path = self._base_path / CLIENT_DIR / client_id_or_name
                 if client_path.is_symlink():
                     client_id = os.readlink(client_path)
-                    client_path = self._base_path / self._CLIENT_DIR / client_id
+                    client_path = self._base_path / CLIENT_DIR / client_id
             return LocalDatabaseServerSession(self, client_path)
         except FileNotFoundError as exc:
             logger.error(f"Session not found {client_id_or_name}")
@@ -62,13 +67,13 @@ class LocalDatabase:
         split_size = self.config.store_split_size
         split_count = self.config.store_split_count
         split = [ref_hash[x:x+split_size] for x in range(0, split_count * split_size, split_size)]
-        return self._base_path.joinpath(self._STORE_DIR, *split, ref_hash)
+        return self._base_path.joinpath(STORE_DIR, *split, ref_hash)
 
     def create_client(self, client_config: protocol.ClientConfiguration) -> protocol.ServerSession:
-        (self._base_path / self._CLIENT_DIR).mkdir(exist_ok=True, parents=True)
-        client_name_path = self._base_path / self._CLIENT_DIR / client_config.client_name
+        (self._base_path / CLIENT_DIR).mkdir(exist_ok=True, parents=True)
+        client_name_path = self._base_path / CLIENT_DIR / client_config.client_name
         client_name_path.symlink_to(str(client_config.client_id))
-        client_path = self._base_path / self._CLIENT_DIR / str(client_config.client_id)
+        client_path = self._base_path / CLIENT_DIR / str(client_config.client_id)
         client_path.mkdir(exist_ok=False, parents=True)
         with (client_path / _CONFIG_FILE).open('w') as file:
             file.write(client_config.json(indent=True))
@@ -76,7 +81,7 @@ class LocalDatabase:
 
     def iter_clients(self) -> Iterable[protocol.ClientConfiguration]:
         clients = set()
-        for file in (self._base_path / self._CLIENT_DIR).iterdir():
+        for file in (self._base_path / CLIENT_DIR).iterdir():
             while file.is_symlink():
                 file = file.readlink()
             if file.is_dir() and (file / _CONFIG_FILE).is_file():
@@ -89,8 +94,8 @@ class LocalDatabase:
         base_path.mkdir(exist_ok=True, parents=True)
         with (base_path / _CONFIG_FILE).open('x') as file:
             file.write(configuration.json(indent=True))
-        (base_path / cls._STORE_DIR).mkdir(exist_ok=False, parents=True)
-        (base_path / cls._CLIENT_DIR).mkdir(exist_ok=False, parents=True)
+        (base_path / STORE_DIR).mkdir(exist_ok=False, parents=True)
+        (base_path / CLIENT_DIR).mkdir(exist_ok=False, parents=True)
         return cls(base_path)
 
 
@@ -99,7 +104,6 @@ class LocalDatabaseServerSession(protocol.ServerSession):
     _BACKUPS = 'backup'
     _SESSIONS = 'sessions'
     _TIMESTMAP_FORMAT = "%Y-%m-%d_%H:%M:%S.%f"
-    _DIR_SUFFIX = ".d"
 
     client_config: protocol.ClientConfiguration = None
 
@@ -191,7 +195,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
     async def get_directory(self, inode: Inode) -> Directory:
         if inode.type != protocol.FileType.DIRECTORY:
             raise ValueError(f"Cannot open file type {inode.type} as a directory")
-        inode_hash = inode.hash + self._DIR_SUFFIX
+        inode_hash = inode.hash + DIR_SUFFIX
         with self._database.store_path_for(inode_hash).open('r') as file:
             return Directory.parse_raw(file.read())
 
@@ -245,7 +249,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
                 raise protocol.InvalidArgumentsError(f"Child {name} has no hash value")
 
         directory_hash, content = definition.hash()
-        if self._object_exists(directory_hash + self._server_session._DIR_SUFFIX):
+        if self._object_exists(directory_hash + DIR_SUFFIX):
             logger.debug(f"Directory def already exists {directory_hash}")
             return protocol.DirectoryDefResponse(ref_hash=directory_hash)
 
@@ -253,7 +257,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         for name, inode in definition.children.items():
             inode_hash = inode.hash
             if inode.type is protocol.FileType.DIRECTORY:
-                inode_hash += self._server_session._DIR_SUFFIX
+                inode_hash += DIR_SUFFIX
             if not self._object_exists(inode_hash):
                 missing.append(name)
 
@@ -265,7 +269,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         with tmp_path.open('xb') as file:
             try:
                 file.write(content)
-                tmp_path.rename(self._store_path_for(directory_hash + self._server_session._DIR_SUFFIX))
+                tmp_path.rename(self._store_path_for(directory_hash + DIR_SUFFIX))
             except:
                 tmp_path.unlink()
                 raise
@@ -332,7 +336,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             raise protocol.SessionClosed()
         location_hash = inode.hash
         if inode.type is protocol.FileType.DIRECTORY:
-            location_hash += self._server_session._DIR_SUFFIX
+            location_hash += DIR_SUFFIX
         if not self._object_exists(location_hash):
             raise ValueError(f"Cannot create {root_dir_name} - does not exist: {inode.hash}")
         file_path = self._session_path / self._ROOTS / root_dir_name
