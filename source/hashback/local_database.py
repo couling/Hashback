@@ -119,8 +119,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
 
     async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False,
                            description: Optional[str] = None) -> protocol.BackupSession:
-        backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity,
-                                                     self.client_config.timezone)
+        backup_date = self.client_config.normalize_backup_date(backup_date)
 
         if not allow_overwrite:
             # TODO consider raising the same exception if an open session already exists for the same date
@@ -150,8 +149,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
 
         if backup_date is not None:
             # This is inefficient if there are a lot of sessions but it get's the job done.
-            backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity,
-                                                         self.client_config.timezone)
+            backup_date = self.client_config.normalize_backup_date(backup_date)
             for session_path in (self._client_path / self._SESSIONS).iterdir():
                 session = LocalDatabaseBackupSession(self, session_path)
                 if session.config.backup_date == backup_date:
@@ -169,7 +167,6 @@ class LocalDatabaseServerSession(protocol.ServerSession):
             results.append(backup_config)
         return results
 
-
     async def list_backups(self) -> List[Tuple[datetime, str]]:
         results = []
         for backup in (self._client_path / self._BACKUPS).iterdir():
@@ -186,8 +183,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
                 logger.warning(f"No backup found for {self.client_config.client_name} ({self.client_config.client_id})")
                 return None
         else:
-            backup_date = protocol.normalize_backup_date(backup_date, self.client_config.backup_granularity,
-                                                         self.client_config.timezone)
+            backup_date = self.client_config.normalize_backup_date(backup_date)
             backup_path = self._path_for_backup_date(backup_date)
         with backup_path.open('r') as file:
             return protocol.Backup.parse_raw(file.read())
@@ -206,6 +202,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         return await AsyncFile.open(result_path, "r")
 
     def complete_backup(self, meta: protocol.Backup, overwrite: bool):
+        meta.backup_date = self.client_config.normalize_backup_date(meta.backup_date)
         backup_path = self._path_for_backup_date(meta.backup_date)
         backup_path.parent.mkdir(exist_ok=True, parents=True)
         with backup_path.open('w' if overwrite else 'x') as file:

@@ -63,7 +63,7 @@ class Inode(BaseModel):
         return Inode(
             mode=stat.S_IMODE(struct_stat.st_mode),
             type=file_type,
-            size=struct_stat.st_size if file_type is FileType.REGULAR else None,
+            size=struct_stat.st_size if file_type is FileType.REGULAR or file_type is FileType.LINK else None,
             uid=struct_stat.st_uid,
             gid=struct_stat.st_gid,
             modified_time=datetime.fromtimestamp(struct_stat.st_mtime, timezone.utc) \
@@ -204,6 +204,9 @@ class ClientConfiguration(BaseModel):
 
     def date_string(self, source_date: datetime) -> str:
         return source_date.astimezone(self.timezone).isoformat()
+
+    def normalize_backup_date(self, backup_date: datetime):
+        return normalize_backup_date(backup_date, self.backup_granularity, self.timezone)
 
 
 class BackupSessionConfig(BaseModel):
