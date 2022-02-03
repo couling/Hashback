@@ -13,7 +13,7 @@ from .algorithms import BackupController
 from .local_file_system import LocalFileSystemExplorer
 from .log_config import LogConfig, flush_early_logging, setup_early_logging
 from .misc import SettingsConfig, register_clean_shutdown, run_then_cancel
-from .protocol import Backup, DuplicateBackup, ServerSession, DEFAULT_ENCODING
+from .protocol import Backup, DuplicateBackup, ServerSession, ENCODING
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def configure(config_path: Optional[Path], user: bool, log_level: Optional[str],
 
     logger.info(f"Saving settings to {config_path}")
     config_path.touch(mode=0o600, exist_ok=True)
-    with config_path.open('w', encoding=DEFAULT_ENCODING) as file:
+    with config_path.open('w', encoding=ENCODING) as file:
         file.write(new_settings.json(indent=True, exclude_defaults=True))
 
 

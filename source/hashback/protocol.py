@@ -17,7 +17,7 @@ VERSION = "1.0"
 
 EMPTY_FILE = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 READ_SIZE = (1024**2) * 10
-DEFAULT_ENCODING = "utf-8"
+ENCODING = "utf-8"
 
 class FileType(enum.Enum):
 
@@ -34,9 +34,9 @@ class Inode(BaseModel):
     type: FileType
     mode: int
     modified_time: Optional[datetime]
-    size: Optional[int]
-    uid: int
-    gid: int
+    size: Optional[int] = None
+    uid: Optional[int] = None
+    gid: Optional[int] = None
     hash: Optional[str] = None
 
     _MODE_CHECKS = [
@@ -63,7 +63,7 @@ class Inode(BaseModel):
         return Inode(
             mode=stat.S_IMODE(struct_stat.st_mode),
             type=file_type,
-            size=struct_stat.st_size if file_type is FileType.REGULAR or file_type is FileType.LINK else None,
+            size=struct_stat.st_size if file_type in (FileType.REGULAR, FileType.LINK) else None,
             uid=struct_stat.st_uid,
             gid=struct_stat.st_gid,
             modified_time=datetime.fromtimestamp(struct_stat.st_mtime, timezone.utc) \
@@ -90,7 +90,7 @@ class Directory(BaseModel):
         self.__root__ = value
 
     def dump(self) -> bytes:
-        return self.json(sort_keys=True).encode()
+        return self.json(sort_keys=True, skip_defaults=True).encode(ENCODING)
 
     def hash(self) -> DirectoryHash:
         content = self.dump()
@@ -565,7 +565,7 @@ def _(content: str) -> str:
     """
     Generate an sha256sum for the given content.
     """
-    return hash_content(content.encode("utf-8"))
+    return hash_content(content.encode(ENCODING))
 
 
 async def async_hash_content(content: FileReader):
