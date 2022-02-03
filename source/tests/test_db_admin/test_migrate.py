@@ -69,4 +69,4 @@ async def test_simple_migration(cli_runner, local_db: LocalDatabase, dir_to_back
     with await client_session.get_file(children['grandchild']) as result_file:
         saved_content = await result_file.read()
     assert len(saved_content) == 0
-    assert len(saved_content) is None
+    assert children['grandchild'].size is None
