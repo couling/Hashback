@@ -1,6 +1,6 @@
 FROM alpine:latest AS base
-RUN --mount=type=cache,sharing=locked,target=/var/cache/apk \
-    apk add python3 py3-pip py3-wheel
+RUN --mount=type=cache,sharing=locked,target=/etc/apk/cache \
+    apk add --no-cache python3 py3-pip py3-wheel
 
 FROM base as build
 COPY /dist/ /hashback/
