@@ -28,9 +28,7 @@ def main(context: click.Context, config_path: Path):
 
 
 @main.command()
-@click.option("--host", default=["::1", "127.0.0.1"], multiple=True)
-@click.option("--port", type=click.INT, default=8000)
-def run_foreground(host: List[str], port: int):
+def run_foreground():
     settings: Settings = click.get_current_context().obj
     log_config = configure_logging(settings)
 
@@ -40,7 +38,7 @@ def run_foreground(host: List[str], port: int):
 
     register_clean_shutdown()
     logging.info("Starting up")
-    run(f"{app.__name__}:app", access_log=True, log_config=log_config, host=host, port=port)
+    run(f"{app.__name__}:app", access_log=True, log_config=log_config, host=settings.hosts, port=settings.port)
 
 
 @main.command()
@@ -95,7 +93,7 @@ class Settings(BaseSettings):
     users_path: Path
     session_cache_size: int = 128
     port: int = DEFAULT_PORT
-    host: str = "localhost"
+    hosts: List[str] = ["localhost"]
     logging: LogConfig = LogConfig()
 
     class Config(SettingsConfig):
