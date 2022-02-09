@@ -169,10 +169,14 @@ class LocalDatabaseServerSession(protocol.ServerSession):
 
     async def list_backups(self) -> List[Tuple[datetime, str]]:
         results = []
-        for backup in (self._client_path / self._BACKUPS).iterdir():
-            with backup.open('r') as file:
-                backup_config = protocol.Backup.parse_raw(file.read())
-            results.append((backup_config.backup_date, backup_config.description))
+        try:
+            for backup in (self._client_path / self._BACKUPS).iterdir():
+                with backup.open('r') as file:
+                    backup_config = protocol.Backup.parse_raw(file.read())
+                results.append((backup_config.backup_date, backup_config.description))
+        except FileNotFoundError:
+            # Backup directory wasn't created.
+            pass
         return results
 
     async def get_backup(self, backup_date: Optional[datetime] = None) -> Optional[Backup]:

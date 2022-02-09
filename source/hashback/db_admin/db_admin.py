@@ -70,7 +70,7 @@ def add_root(database: LocalDatabase, client_name: str, root_name: str, root_pat
         new_dir.filters.append(protocol.Filter(filter=protocol.FilterType.INCLUDE, path=path))
     for path in options['exclude']:
         new_dir.filters.append(protocol.Filter(filter=protocol.FilterType.EXCLUDE, path=path))
-    for pattern in options['pattern-ignore']:
+    for pattern in options['pattern_ignore']:
         new_dir.filters.append(protocol.Filter(filter=protocol.FilterType.PATTERN_EXCLUDE, path=pattern))
     client.client_config.backup_directories[root_name] = new_dir
     client.save_config()

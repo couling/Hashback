@@ -210,7 +210,7 @@ def _create_http_client(settings: Settings):
 
     if settings.credentials is not None:
         if settings.credentials.is_absolute():
-            credentials_path = server_properties.credentials
+            credentials_path = settings.credentials
         else:
             credentials_path = settings.config_path.parent / settings.credentials
         server_properties.credentials = http_protocol.Credentials.parse_file(credentials_path)
