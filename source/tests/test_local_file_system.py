@@ -70,7 +70,7 @@ def test_directory_explorer_is_well_named(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def basic_directory_iteration(tmp_path: Path):
+async def test_basic_directory_iteration(tmp_path: Path):
     file_name = 'some_file'
     dir_name = 'some_directory'
 
@@ -79,7 +79,7 @@ async def basic_directory_iteration(tmp_path: Path):
         file.write("Hello World")
 
     time_now = datetime.datetime.now(datetime.timezone.utc)
-    time_now = time_now.replace(microsecond=round(time_now.microsecond, 1))
+    time_now = time_now.replace(microsecond=round(time_now.microsecond, -3))
     os.utime(tmp_path / 'some_file', (time_now.timestamp(), time_now.timestamp()))
 
     file_list = {}
@@ -99,7 +99,7 @@ async def basic_directory_iteration(tmp_path: Path):
     assert file_list[file_name] in file_explorer._all_files.values()
     assert file_list[file_name].type is protocol.FileType.REGULAR
     assert file_list[file_name].size == len("Hello World".encode())
-    assert file_list[file_name].modified_time == time_now
+    assert (file_list[file_name].modified_time - time_now).microseconds < 100
 
 
 @pytest.mark.asyncio

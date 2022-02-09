@@ -1,6 +1,6 @@
-from .. import http_protocol
-from .. import protocol
 import importlib.metadata
+
+from .. import http_protocol, protocol
 
 _SERVER_TYPE='hashback'
 
