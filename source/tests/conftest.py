@@ -17,5 +17,6 @@ def client_config(tmp_path) -> ClientConfiguration:
                 base_path=str(tmp_path / 'test_root'),
                 filters=[Filter(filter=FilterType.EXCLUDE, path='exclude')],
             )
-        }
+        },
+        named_timezone='America/New_York'
     )

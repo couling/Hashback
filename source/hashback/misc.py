@@ -69,26 +69,20 @@ class SettingsConfig:
 
     @classmethod
     def customise_sources(cls, init_settings, env_settings, file_secret_settings):
-        config_path = init_settings.init_kwargs.get('config_path', None)
+        """
+        Load settings from the site config path if it exists, and override with either the user config_path
+        Or the specified config_path
+        """
+        config_path = init_settings.init_kwargs.pop('config_path', None)
         if config_path is None:
-            # Try to find a default config.
-            paths = [cls.user_config_path(), cls.site_config_path()]
-            for possible_path in paths:
-                if possible_path.exists():
-                    config_path = possible_path
-                    init_settings.init_kwargs['config_path'] = config_path
-                    break
+            config_path = cls.user_config_path()
 
-        if config_path is None:
-            # There's no config file, even in a default location.  Initialize without any.
-            return (
-                init_settings,
-                env_settings,
-                file_secret_settings,
-            )
+        load_paths = [cls.site_config_path(), config_path]
+        loaders = [functools.partial(cls._load_settings, path) for path in load_paths if path.is_file()]
+
         return (
             init_settings,
-            functools.partial(cls._load_settings, config_path),
+            *loaders,
             env_settings,
             file_secret_settings,
         )
@@ -115,7 +109,6 @@ class SettingsConfig:
         except OSError as exc:
             logger.warning(f"Could not load {file_path}: ({str_exception(exc)}))")
             result = {}
-        result['config_path'] = file_path
         return result
 
 

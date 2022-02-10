@@ -90,7 +90,7 @@ class LocalDatabase:
             yield protocol.ClientConfiguration.parse_file(client / _CONFIG_FILE)
 
     @classmethod
-    def create_database(cls, base_path: Path, configuration: Configuration) -> "LocalDatabase":
+    def create_database(cls, base_path: Path, configuration: Configuration = Configuration()) -> "LocalDatabase":
         base_path.mkdir(exist_ok=True, parents=True)
         with (base_path / _CONFIG_FILE).open('x') as file:
             file.write(configuration.json(indent=True))
@@ -135,6 +135,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
             allow_overwrite=allow_overwrite,
             backup_date=backup_date,
             description=description,
+            started=datetime.now(self.client_config.timezone)
         )
         with (backup_session_path / _CONFIG_FILE).open('w') as file:
             file.write(session_config.json(indent=True))
@@ -372,7 +373,7 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
             client_name=self._server_session.client_config.client_name,
             backup_date=self._config.backup_date,
             started=self._config.started,
-            completed=datetime.now(timezone.utc),
+            completed=datetime.now(self._server_session.client_config.timezone),
             description=self._config.description,
             roots=roots,
         )

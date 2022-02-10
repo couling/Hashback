@@ -90,7 +90,7 @@ class Directory(BaseModel):
         self.__root__ = value
 
     def dump(self) -> bytes:
-        return self.json(sort_keys=True, skip_defaults=True).encode(ENCODING)
+        return self.json(sort_keys=True, exclude_defaults=True).encode(ENCODING)
 
     def hash(self) -> DirectoryHash:
         content = self.dump()

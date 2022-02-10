@@ -88,7 +88,6 @@ def revoke(client: str):
 
 
 class Settings(BaseSettings):
-    config_path: Path
     database_path: Path
     users_path: Path
     session_cache_size: int = 128

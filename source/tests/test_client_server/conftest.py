@@ -1,17 +1,17 @@
 # pylint: disable=redefined-outer-name
-import asyncio
 import importlib
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 import requests
 from starlette.testclient import TestClient
 
-from hashback.http_client import ClientSession
 from hashback.basic_auth.client import BasicAuthClient
-from hashback.protocol import ClientConfiguration, BackupSessionConfig, BackupSession
+from hashback.http_client import ClientSession
+from hashback.protocol import BackupSession, BackupSessionConfig, ClientConfiguration
 from hashback.server import app, security
 from tests.test_client_server.constants import SERVER_PROPERTIES
 
@@ -56,8 +56,8 @@ def mock_server(monkeypatch: pytest.MonkeyPatch, mock_local_db: MagicMock) -> Te
     return result
 
 
-@pytest.fixture()
-def client(client_config: ClientConfiguration, monkeypatch: pytest.MonkeyPatch,
+@pytest_asyncio.fixture()
+async def client(client_config: ClientConfiguration, monkeypatch: pytest.MonkeyPatch,
            mock_server: TestClient) -> ClientSession:
     async def dummy_authorizer(_):
         return security.SimpleAuthorization(client_config.client_id, set(), set())
@@ -65,13 +65,13 @@ def client(client_config: ClientConfiguration, monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setattr(requests, 'Session', lambda: mock_server)
     monkeypatch.setattr(app, '_authorizer', dummy_authorizer)
     with BasicAuthClient(SERVER_PROPERTIES) as client:
-        yield asyncio.get_event_loop().run_until_complete(ClientSession.create_session(client))
+        yield await ClientSession.create_session(client)
 
 
-@pytest.fixture()
-def client_backup_session(client: ClientSession) -> BackupSession:
-    return asyncio.get_event_loop().run_until_complete(client.start_backup(
+@pytest_asyncio.fixture()
+async def client_backup_session(client: ClientSession) -> BackupSession:
+    return await client.start_backup(
         backup_date=datetime.now(timezone.utc),
         allow_overwrite=True,
         description='a new test backup',
-    ))
+    )

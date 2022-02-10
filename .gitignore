@@ -10,3 +10,4 @@ dist
 build
 deb_dist
 .DS_Store
+htmlcov
