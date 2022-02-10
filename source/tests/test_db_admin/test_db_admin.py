@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from hashback.local_database import LocalDatabase
-from hashback.protocol import ClientConfiguration
+from hashback.protocol import ClientConfiguration, Filter, FilterType
 
 
 def test_create_client(cli_runner, local_db_path: Path):
@@ -43,3 +43,25 @@ def test_add_new_root(cli_runner, local_db_path: Path, refer_by: str):
     assert len(roots) == 1
     assert roots['some_root'].base_path == '/foo/bar'
     assert roots['some_root'].filters == []
+
+
+@pytest.mark.parametrize(('option', 'filter_type'), [
+    ('--exclude', FilterType.EXCLUDE),
+    ('--include', FilterType.INCLUDE),
+    ('--pattern-ignore', FilterType.PATTERN_EXCLUDE),
+])
+def test_add_root_with_filters(cli_runner, local_db_path, option: str, filter_type: FilterType):
+    database = LocalDatabase(local_db_path)
+    client_name = 'test_client'
+    database.create_client(ClientConfiguration(client_name=client_name))
+
+    cli_runner('add-directory', client_name, 'some_root', '/foo/bar', option, 'run', option, 'var/lib')
+
+    roots = database.open_client_session(client_name).client_config.backup_directories
+
+    assert len(roots) == 1
+    assert roots['some_root'].base_path == '/foo/bar'
+    assert sorted(roots['some_root'].filters, key=lambda item: item.path) == [
+        Filter(filter=filter_type, path='run'),
+        Filter(filter=filter_type, path='var/lib'),
+    ]

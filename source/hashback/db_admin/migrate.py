@@ -1,5 +1,4 @@
 import logging
-import logging
 import multiprocessing
 import os
 from datetime import datetime
@@ -159,7 +158,7 @@ class Migrator:
         root_hash = self.backup_dir(base_path)
         existing_backup.roots[root_name] = protocol.Inode.from_stat(base_path.stat(), root_hash)
 
-        backup_meta_path.parent.mkdir(parents=True)
+        backup_meta_path.parent.mkdir(parents=True, exist_ok=True)
         with backup_meta_path.open('w') as file:
             file.write(existing_backup.json(indent=True))
 
@@ -192,7 +191,7 @@ class Migrator:
         if ref_hash not in self.exists_cache:
             target_path = self.database.store_path_for(ref_hash=ref_hash)
             if not target_path.exists():
-                target_path.parent.mkdir(parents=True)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
                 with target_path.open('wb') as file:
                     file.write(directory_content.content)
 
@@ -213,7 +212,7 @@ class Migrator:
         if ref_hash not in self.exists_cache:
             target_path = self.database.store_path_for(ref_hash)
             if not target_path.exists():
-                target_path.parent.mkdir(parents=True)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     file_path.link_to(target_path)
                 except OSError as exc:
@@ -240,7 +239,7 @@ class Migrator:
         ref_hash = protocol.hash_content(content)
         target_path = self.database.store_path_for(ref_hash)
         if not target_path.exists():
-            target_path.parent.mkdir(parents=True)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
             with target_path.open('wb') as file:
                 file.write(content.encode())
         return ref_hash
@@ -250,7 +249,7 @@ class Migrator:
         target_path = self.database.store_path_for(ref_hash)
 
         if not target_path.exists():
-            target_path.parent.mkdir(parents=True)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
             # No content
             target_path.touch()
         return ref_hash
