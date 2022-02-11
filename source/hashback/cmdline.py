@@ -38,7 +38,7 @@ def main(config_path: Optional[Path]):
     settings = Settings(config_path=config_path)
     logging.config.dictConfig(settings.logging.dict_config())
     flush_early_logging()
-    client = create_client(settings, config_path)
+    client = create_client(settings)
     context.call_on_close(lambda: run_then_cancel(client.close()))
     context.obj = client
 
@@ -209,7 +209,7 @@ class Settings(BaseSettings):
 
         for config_path in [self.Config.user_config_path, self.Config.site_config_path]:
             parent = config_path().parent
-            logger.debug(f"Looking for %s in %s", self.credentials, parent)
+            logger.debug("Looking for %s in %s", self.credentials, parent)
             credentials_path = parent / self.credentials
             if credentials_path.is_file():
                 return credentials_path
@@ -217,12 +217,12 @@ class Settings(BaseSettings):
         raise FileNotFoundError(str(self.credentials))
 
 
-def create_client(settings: Settings, config_path: Path) -> ServerSession:
+def create_client(settings: Settings) -> ServerSession:
     url = urlparse(settings.database_url)
     if url.scheme in ('', 'file'):
         return _create_local_client(settings)
     if url.scheme in ('http', 'https'):
-        return _create_http_client(settings, config_path)
+        return _create_http_client(settings)
     raise ValueError(f"Unknown scheme {url.scheme}")
 
 
@@ -233,7 +233,7 @@ def _create_local_client(settings: Settings):
     return local_database.LocalDatabase(Path(settings.database_url)).open_client_session(settings.client_id)
 
 
-def _create_http_client(settings: Settings, config_path: Optional[Path]):
+def _create_http_client(settings: Settings):
     async def _start_session():
         server_version = await client.server_version()
         logger.info(f"Connected to server {server_version.server_type} protocol {server_version.protocol_version}")

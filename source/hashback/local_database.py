@@ -3,16 +3,16 @@ import hashlib
 import logging
 import os
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union, List, Tuple, Iterable
+from typing import Iterable, List, Optional, Tuple, Union
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
 from . import protocol
 from .local_file_system import AsyncFile, async_stat
-from .protocol import Inode, Directory, Backup, BackupSessionConfig
+from .protocol import Backup, BackupSessionConfig, Directory, Inode
 
 _CONFIG_FILE = 'config.json'
 
@@ -158,7 +158,7 @@ class LocalDatabaseServerSession(protocol.ServerSession):
             else:
                 raise protocol.NotFoundException(f"Backup date not found {backup_date}")
         else:
-         raise ValueError("Either session_id or backup_date must be specified but neither were")
+            raise ValueError("Either session_id or backup_date must be specified but neither were")
 
         if discard_partial_files:
             session.discard_partial()

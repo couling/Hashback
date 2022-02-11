@@ -179,7 +179,7 @@ class TestWithBackup:
             assert await new_session.check_file_upload_size(resume_id) == 5
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize('params', ({'discard_partial_files': False}, {}), ids=lambda item: str(item))
+    @pytest.mark.parametrize('params', ({'discard_partial_files': False}, {}), ids=str)
     async def test_resume_backup_no_discard_partial(self, backup_session: LocalDatabaseBackupSession, params):
         resume_id = uuid4()
         # Create a partial file with 0 bytes

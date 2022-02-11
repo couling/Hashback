@@ -30,8 +30,8 @@ class MockServerSession(protocol.ServerSession):
             ),
         )
 
-    async def resume_backup(self, *, session_id: Optional[UUID] = None,
-                            backup_date: Optional[datetime] = None) -> BackupSession:
+    async def resume_backup(self, *, session_id: Optional[UUID] = None, backup_date: Optional[datetime] = None,
+                            discard_partial_files: bool = False) -> BackupSession:
         raise NotImplementedError()
 
     async def list_backup_sessions(self) -> List[BackupSessionConfig]:

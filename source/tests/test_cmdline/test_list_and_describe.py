@@ -1,12 +1,30 @@
+#pylint: disable=redefined-outer-name
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import pytest
 import pytest_asyncio
 
 from hashback.cmdline import Settings
 from hashback.local_database import LocalDatabase
-from hashback.protocol import Directory, FileType, Inode
+from hashback.protocol import ClientConfiguration, Directory, FileType, Inode
 
+
+@pytest.fixture(autouse=True)
+def configured_client(local_database, client_config: ClientConfiguration, user_config_path: Path) -> Settings:
+    local_database.create_client(client_config)
+    user_config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    client_settings = Settings(
+        database_url=str(local_database.path),
+        client_id=str(client_config.client_id),
+    )
+
+    with user_config_path.open('w') as file:
+        file.write(client_settings.json(exclude_defaults=True, indent=True))
+
+    return client_settings
 
 @pytest_asyncio.fixture()
 async def existing_backups(configured_client: Settings, local_database: LocalDatabase):
@@ -32,7 +50,7 @@ async def existing_backups(configured_client: Settings, local_database: LocalDat
     return example_backups
 
 
-def test_json_list_backups_returns_no_results(cli_runner, configured_client: Settings):
+def test_json_list_backups_returns_no_results(cli_runner):
     result = cli_runner('list', '--json')
     assert json.loads(result.stdout) == []
 
@@ -69,12 +87,12 @@ def test_list_backups_returns_results(cli_runner, configured_client: Settings, e
         assert str(description) in result.stdout
 
 
-def test_list_backups_returns_no_results(cli_runner, configured_client: Settings):
+def test_list_backups_returns_no_results(cli_runner):
     result = cli_runner('list')
     assert "No backups found!" in result.stdout
 
 
-def test_describe_listed_backup(cli_runner, configured_client: Settings, existing_backups, local_database):
+def test_describe_listed_backup(cli_runner, existing_backups, local_database):
     result = json.loads(cli_runner('list', '--json').stdout)
     backup_date_time = result[-1]['date_time']
 
@@ -83,7 +101,7 @@ def test_describe_listed_backup(cli_runner, configured_client: Settings, existin
     assert existing_backups[0][1] in result.stdout
 
 
-def test_describe_listed_backup_json(cli_runner, configured_client: Settings, existing_backups, local_database):
+def test_describe_listed_backup_json(cli_runner, existing_backups, local_database):
     result = json.loads(cli_runner('list', '--json').stdout)
     backup_date_time = result[-1]['date_time']
 

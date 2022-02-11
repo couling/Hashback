@@ -7,7 +7,7 @@ import pytest
 from hashback.cmdline import Settings
 
 
-def test_configure_minimum(cli_runner, user_config_path: Path, site_config_path: Path):
+def test_configure_minimum(cli_runner, user_config_path: Path):
     client_id = str(uuid4())
     db_url = '/not-exists'
 
@@ -61,8 +61,8 @@ def test_configure_credentials(cli_runner, user_config_path: Path, site_config_p
     ('--client-id', str(uuid4())),
 ])
 def test_minimum_validation(cli_runner, args: Collection[str]):
-    result = cli_runner('configure', exit_code=1)
-    assert "validation errors for Settings" in result.stderr
+    result = cli_runner('configure', exit_code=1, *args)
+    assert "validation" in result.stderr and "error" in result.stderr
 
 
 def test_configure_log_level(cli_runner, user_config_path: Path):
@@ -87,12 +87,13 @@ def test_configure_log_unit_level(cli_runner, user_config_path):
     database_url = '/foo/bar'
 
     settings = Settings(client_id=client_id, database_url=database_url)
+    # pylint: disable=use-implicit-booleaness-not-comparison
     assert settings.logging.log_unit_levels == {}
     user_config_path.parent.mkdir(parents=True, exist_ok=True)
     with user_config_path.open('w') as file:
         file.write(settings.json(exclude_unset=True, indent=True))
 
-    cli_runner('configure', '--log-unit-level', f'foo=WARNING', '--log-unit-level', f'bar=DEBUG')
+    cli_runner('configure', '--log-unit-level', 'foo=WARNING', '--log-unit-level', 'bar=DEBUG')
 
     settings = Settings.parse_file(user_config_path)
     assert settings.logging.log_unit_levels == {
@@ -113,7 +114,7 @@ def test_updating_levels_leaves_others_in_place(cli_runner, user_config_path):
     with user_config_path.open('w') as file:
         file.write(settings.json(exclude_defaults=True, indent=True))
 
-    cli_runner('configure', '--log-unit-level', f'foo=WARNING')
+    cli_runner('configure', '--log-unit-level', 'foo=WARNING')
 
     settings = Settings.parse_file(user_config_path)
     assert settings.logging.log_unit_levels == {
@@ -135,7 +136,7 @@ def test_deleting_levels(cli_runner, user_config_path):
     with user_config_path.open('w') as file:
         file.write(settings.json(exclude_defaults=True, indent=True))
 
-    cli_runner('configure', '--log-unit-level', f'foo=')
+    cli_runner('configure', '--log-unit-level', 'foo=')
 
     settings = Settings.parse_file(user_config_path)
     assert settings.logging.log_unit_levels == {
@@ -143,7 +144,7 @@ def test_deleting_levels(cli_runner, user_config_path):
     }
 
 
-@pytest.mark.parametrize('args', [('--log-level', 'BLAH'), ('--log-unit-level', 'foo=BLAH')], ids=lambda x: str(x))
+@pytest.mark.parametrize('args', [('--log-level', 'BLAH'), ('--log-unit-level', 'foo=BLAH')], ids=str)
 def test_incorrect_level_name_raises_exception(cli_runner, user_config_path, args):
     client_id = str(uuid4())
     database_url = '/foo/bar'
@@ -160,7 +161,7 @@ def test_incorrect_level_name_raises_exception(cli_runner, user_config_path, arg
 
     result = cli_runner('configure', *args, exit_code=1)
 
-    assert f'Unknown level name ' in result.stderr
+    assert 'Unknown level name ' in result.stderr
     settings = Settings.parse_file(user_config_path)
     assert settings.logging.log_level == 'INFO'
     assert settings.logging.log_unit_levels == {

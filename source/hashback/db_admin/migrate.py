@@ -11,7 +11,6 @@ import dateutil.tz
 from .db_admin import click_main
 from .. import protocol
 from ..local_database import DIR_SUFFIX, LocalDatabase
-from ..local_file_system import LocalFileSystemExplorer
 from ..misc import str_exception
 
 logger = logging.getLogger(__name__)
@@ -39,7 +38,6 @@ def migrate_backup(database: LocalDatabase,  client_name: str, root_name: str, b
 
     # The local filesystem explorer caches the inodes and indexs them by st_dev, st_ino meaning that when hardlinks
     # of the same file are encountered, there's no need to rescan
-    explorer = LocalFileSystemExplorer()
     migrator = Migrator(database, client_name)
     if options['batch']:
         for directory in base_path.iterdir():
@@ -244,7 +242,7 @@ class Migrator:
                 file.write(content.encode())
         return ref_hash
 
-    def backup_pipe(self, file_path: Path) -> str:
+    def backup_pipe(self, _: Path) -> str:
         ref_hash = protocol.EMPTY_FILE
         target_path = self.database.store_path_for(ref_hash)
 
