@@ -56,7 +56,7 @@ class BackupController:
         else:
             last_backup_root = None
 
-        explorer = self.file_system_explorer(scan_spec)
+        explorer = self.file_system_explorer(scan_spec.base_path, scan_spec.filters)
         root_hash = await self._backup_directory(explorer, last_backup_root)
         root_inode = await explorer.inode()
         root_inode.hash = root_hash

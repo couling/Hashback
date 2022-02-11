@@ -200,6 +200,22 @@ class Settings(BaseSettings):
         validate_assignment = True
         SETTINGS_FILE_DEFAULT_NAME = 'client.json'
 
+    def credentials_absolute_path(self) -> Optional[Path]:
+        if self.credentials is None:
+            return None
+
+        if self.credentials.is_absolute():
+            return self.credentials
+
+        for config_path in [self.Config.user_config_path, self.Config.site_config_path]:
+            parent = config_path().parent
+            logger.debug(f"Looking for %s in %s", self.credentials, parent)
+            credentials_path = parent / self.credentials
+            if credentials_path.is_file():
+                return credentials_path
+
+        raise FileNotFoundError(str(self.credentials))
+
 
 def create_client(settings: Settings, config_path: Path) -> ServerSession:
     url = urlparse(settings.database_url)
@@ -217,7 +233,7 @@ def _create_local_client(settings: Settings):
     return local_database.LocalDatabase(Path(settings.database_url)).open_client_session(settings.client_id)
 
 
-def _create_http_client(settings: Settings, config_path: Path):
+def _create_http_client(settings: Settings, config_path: Optional[Path]):
     async def _start_session():
         server_version = await client.server_version()
         logger.info(f"Connected to server {server_version.server_type} protocol {server_version.protocol_version}")
@@ -226,20 +242,17 @@ def _create_http_client(settings: Settings, config_path: Path):
     logger.debug("Loading http client plugin")
     # pylint: disable=import-outside-toplevel
     from . import http_protocol
-    from .http_client import ClientSession
+    from .http_client import ClientSession, RequestsClient
     server_properties = http_protocol.ServerProperties.parse_url(settings.database_url)
 
-    if settings.credentials is not None:
-        if settings.credentials.is_absolute():
-            credentials_path = settings.credentials
-        else:
-            credentials_path = config_path.parent / settings.credentials
+    credentials_path = settings.credentials_absolute_path()
+    if credentials_path is not None:
         server_properties.credentials = http_protocol.Credentials.parse_file(credentials_path)
 
-    if settings.credentials is None and server_properties.credentials is None:
-        from .http_client import RequestsClient
+    if server_properties.credentials is None:
         client = RequestsClient(server_properties)
     else:
+        logger.debug("Loading basic auth client plugin")
         from .basic_auth.client import BasicAuthClient
         client = BasicAuthClient(server_properties)
 

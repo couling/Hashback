@@ -102,7 +102,7 @@ class SettingsConfig:
         return result
 
     @classmethod
-    def _load_settings(cls, file_path: Path, _) -> Dict[str,Any]:
+    def _load_settings(cls, file_path: Path, context) -> Dict[str,Any]:
         try:
             with file_path.open('r') as settings_file:
                 result = json.load(settings_file)
