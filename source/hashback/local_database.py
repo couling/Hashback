@@ -142,23 +142,27 @@ class LocalDatabaseServerSession(protocol.ServerSession):
 
         return LocalDatabaseBackupSession(self, backup_session_path)
 
-    async def resume_backup(self, *, session_id: Optional[UUID] = None,
-                            backup_date: Optional[datetime] = None) -> protocol.BackupSession:
+    async def resume_backup(self, *, session_id: Optional[UUID] = None, backup_date: Optional[datetime] = None,
+                            discard_partial_files: bool = False) -> protocol.BackupSession:
         if session_id is not None:
             backup_path = self._path_for_session_id(session_id)
-            return LocalDatabaseBackupSession(self, backup_path)
+            session = LocalDatabaseBackupSession(self, backup_path)
 
-        if backup_date is not None:
+        elif backup_date is not None:
             # This is inefficient if there are a lot of sessions but it get's the job done.
             backup_date = self.client_config.normalize_backup_date(backup_date)
             for session_path in (self._client_path / self._SESSIONS).iterdir():
                 session = LocalDatabaseBackupSession(self, session_path)
                 if session.config.backup_date == backup_date:
-                    return session
+                    break
+            else:
+                raise protocol.NotFoundException(f"Backup date not found {backup_date}")
+        else:
+         raise ValueError("Either session_id or backup_date must be specified but neither were")
 
-            raise protocol.NotFoundException(f"Backup date not found {backup_date}")
-
-        raise ValueError("Either session_id or backup_date must be specified but neither were")
+        if discard_partial_files:
+            session.discard_partial()
+        return session
 
     async def list_backup_sessions(self) -> List[protocol.BackupSessionConfig]:
         results = []
@@ -348,7 +352,10 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     async def check_file_upload_size(self, resume_id: UUID) -> int:
         if not self.is_open:
             raise protocol.SessionClosed()
-        return (await async_stat(self._temp_path(resume_id))).st_size
+        try:
+            return (await async_stat(self._temp_path(resume_id))).st_size
+        except FileNotFoundError as ex:
+            raise protocol.NotFoundException(str(resume_id)) from ex
 
     async def complete(self) -> protocol.Backup:
         if not self.is_open:
@@ -408,3 +415,9 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
     @property
     def is_open(self) -> bool:
         return self._session_path.exists()
+
+    def discard_partial(self):
+        partial_path = self._session_path / self._PARTIAL
+        if partial_path.is_dir():
+            for file in (self._session_path / self._PARTIAL).iterdir():
+                file.unlink()

@@ -80,12 +80,13 @@ class ClientSession(protocol.ServerSession):
             description=description
         ))
 
-    async def resume_backup(self, *, session_id: Optional[UUID] = None,
-                            backup_date: Optional[datetime] = None) -> BackupSession:
+    async def resume_backup(self, *, session_id: Optional[UUID] = None, backup_date: Optional[datetime] = None,
+                            discard_partial_files: bool = False) -> BackupSession:
         return ClientBackupSession(self, await self._client.request(
             endpoint=http_protocol.RESUME_BACKUP,
             session_id=session_id,
-            backup_date=backup_date
+            backup_date=backup_date,
+            discard_partial=discard_partial_files,
         ))
 
     async def get_backup(self, backup_date: Optional[datetime] = None) -> Optional[Backup]:

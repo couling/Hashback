@@ -161,8 +161,12 @@ async def start_backup(session: protocol.ServerSession = fastapi.Depends(user_se
 
 @endpoint(http_protocol.RESUME_BACKUP)
 async def resume_backup(session: protocol.ServerSession = fastapi.Depends(user_session), session_id: UUID = None,
-                        backup_date: datetime = None) -> protocol.BackupSessionConfig:
-    session = await session.resume_backup(session_id=session_id, backup_date=backup_date)
+                        backup_date: datetime = None, discard_partial: bool = False) -> protocol.BackupSessionConfig:
+    session = await session.resume_backup(
+        session_id=session_id,
+        backup_date=backup_date,
+        discard_partial_files=discard_partial,
+    )
     return session.config
 
 

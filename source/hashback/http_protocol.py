@@ -141,7 +141,8 @@ LIST_BACKUPS = Endpoint('GET', '/list_backups', None, ListBackup)
 # Backup Session
 START_BACKUP = Endpoint('POST', '/backup-session/new', {'backup_date', 'allow_overwrite', 'description'},
                         protocol.BackupSessionConfig)
-RESUME_BACKUP = Endpoint('GET', '/backup-session/', {'session_id', 'backup_date'}, protocol.BackupSessionConfig)
+RESUME_BACKUP = Endpoint('GET', '/backup-session/', {'session_id', 'backup_date' , 'discard_partial'},
+                         protocol.BackupSessionConfig)
 DISCARD_BACKUP = Endpoint('DELETE', '/backup-session/{session_id}', None, None)
 COMPLETE_BACKUP = Endpoint('POST', '/backup-session/{session_id}/complete', None, protocol.Backup)
 DIRECTORY_DEF = Endpoint('POST', '/backup-session/{session_id}/directory', {'replaces'}, protocol.DirectoryDefResponse)

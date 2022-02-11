@@ -9,6 +9,7 @@ import pytest
 
 from hashback import protocol
 from hashback.local_database import LocalDatabase, LocalDatabaseServerSession, LocalDatabaseBackupSession
+from hashback.local_file_system import BytesReader
 from hashback.protocol import ClientConfiguration, Backup, Inode, Directory, FileType, SessionClosed
 
 
@@ -161,6 +162,37 @@ class TestWithBackup:
         )
         assert new_session is not self.backup_session
         assert new_session.config == self.backup_session.config
+
+    @pytest.mark.asyncio
+    async def test_resume_backup_discard_partial(self, backup_session: LocalDatabaseBackupSession):
+        resume_id = uuid4()
+        # Create a partial file with 0 bytes
+        await backup_session.upload_file_content(BytesReader(b'hello'), resume_id=resume_id, is_complete=False)
+        # Sanity check that this was successful
+        assert await backup_session.check_file_upload_size(resume_id) == 5
+
+        new_session = await self.server_session.resume_backup(
+            backup_date=self.backup_session.config.backup_date,
+            discard_partial_files=True,
+        )
+        with pytest.raises(protocol.NotFoundException):
+            assert await new_session.check_file_upload_size(resume_id) == 5
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('params', ({'discard_partial_files': False}, {}), ids=lambda item: str(item))
+    async def test_resume_backup_no_discard_partial(self, backup_session: LocalDatabaseBackupSession, params):
+        resume_id = uuid4()
+        # Create a partial file with 0 bytes
+        await backup_session.upload_file_content(BytesReader(b'hello'), resume_id=resume_id, is_complete=False)
+        # Sanity check that this was successful
+        assert await backup_session.check_file_upload_size(resume_id) == 5
+
+        new_session = await self.server_session.resume_backup(
+            backup_date=self.backup_session.config.backup_date,
+            **params
+        )
+        assert await new_session.check_file_upload_size(resume_id) == 5
+
 
     def test_list_backup_sessions(self):
         all_sessions = asyncio.get_event_loop().run_until_complete(

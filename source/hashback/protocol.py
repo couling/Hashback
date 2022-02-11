@@ -341,14 +341,18 @@ class ServerSession(Protocol):
         """
 
     @abstractmethod
-    async def resume_backup(self, *, session_id: Optional[UUID] = None, backup_date: Optional[datetime] = None
-                            ) -> BackupSession:
+    async def resume_backup(self, *, session_id: Optional[UUID] = None, backup_date: Optional[datetime] = None,
+                            discard_partial_files: bool = False) -> BackupSession:
         """
         Retrieve a backup session.  It is legitimate to have multiple clients attached to the same backup session.
         However this may actually hurt performance since separate clients may end up uploading the same file each where
         a single client would only upload it once.
         :param session_id: The session id to retrieve
         :param backup_date: The backup date of the session to retrieve
+        :param discard_partial_files: Discard all files which have not been completed.
+            It can be useful to allow a backup client to resume it's backup even if the client doesn't know how far it
+            got.  That way fully uploaded files and directories will not need to be uploaded again.  But without
+            knowing how far it got it cannot resume partially uploaded files and must discard them.
         :return: The session associated with the session_id if not None otherwise the session associated with the
             backup_date
         """

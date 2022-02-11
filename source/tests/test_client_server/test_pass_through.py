@@ -83,11 +83,18 @@ class TestPassThroughServerSession(BaseTestPassThrough):
                 description='a new test backup',
             ))
 
-    @pytest.mark.parametrize('params', ({'backup_date': datetime.now(timezone.utc)}, {'session_id': uuid4()}), ids=str)
+    @pytest.mark.parametrize('params', (
+            {'backup_date': datetime.now(timezone.utc)},
+            {'session_id': uuid4()},
+            {'backup_date': datetime.now(timezone.utc), 'discard_partial_files': False},
+            {'backup_date': datetime.now(timezone.utc), 'discard_partial_files': True},
+            {'session_id': uuid4(), 'discard_partial_files': True},
+    ), ids=str)
     def test_resume_backup(self, params):
         backup_session = asyncio.get_event_loop().run_until_complete(self.client_session.resume_backup(**params))
         params.setdefault('backup_date', None)
         params.setdefault('session_id', None)
+        params.setdefault('discard_partial_files', False)
         assert backup_session.server_session is self.client_session
         assert backup_session.is_open
         assert params in (call.kwargs for call in self.mock_backend_session.resume_backup.mock_calls)
