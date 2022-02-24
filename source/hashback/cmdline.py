@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urlparse
+from uuid import UUID
 
 import click
 import pydantic
@@ -14,7 +15,7 @@ from .algorithms import BackupController
 from .local_file_system import LocalFileSystemExplorer
 from .log_config import LogConfig, flush_early_logging, setup_early_logging
 from .misc import SettingsConfig, register_clean_shutdown, run_then_cancel, str_exception
-from .protocol import Backup, DuplicateBackup, ServerSession, ENCODING
+from .protocol import Backup, DuplicateBackup, ENCODING, ServerSession, NotFoundException
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,13 @@ def configure(site: Optional[bool], log_level: Optional[str], log_unit_level: Li
 @click.option("--overwrite/--no-overwrite", default=False)
 @click.option("--fast-unsafe/--slow-safe", default=True)
 @click.option("--full-prescan/--low-mem", default=False)
-def backup(timestamp: datetime, description: Optional[str], fast_unsafe: bool, full_prescan: bool, overwrite: bool):
+@click.option("--resume", type=click.UUID)
+def backup(timestamp: datetime,
+           description: Optional[str],
+           fast_unsafe: bool,
+           full_prescan: bool,
+           overwrite: bool,
+           resume: Optional[UUID]):
     server_session: ServerSession = click.get_current_context().obj
     if timestamp is None:
         timestamp = datetime.now(server_session.client_config.timezone)
@@ -110,33 +117,56 @@ def backup(timestamp: datetime, description: Optional[str], fast_unsafe: bool, f
         timestamp = timestamp.replace(tzinfo=server_session.client_config.timezone)
 
     async def _backup():
-        try:
-            backup_session = await server_session.start_backup(
-                backup_date=timestamp,
-                allow_overwrite=overwrite,
-                description=description,
-            )
-        except DuplicateBackup as exc:
-            raise click.ClickException(f"Duplicate backup {exc}") from None
+        if resume is not None:
+            backup_session = await server_session.resume_backup(session_id=resume)
+        else:
+            try:
+                backup_session = await server_session.start_backup(
+                    backup_date=timestamp,
+                    allow_overwrite=overwrite,
+                    description=description,
+                )
+            except DuplicateBackup as exc:
+                raise click.ClickException(f"Duplicate backup {exc}") from None
 
-        logger.info(f"Backup - {backup_session.config.backup_date}")
+        logger.info(
+            f"Backup - %s (%s) - %s ()",
+            server_session.client_config.client_name,
+            server_session.client_config.client_id,
+            backup_session.config.backup_date,
+            backup_session.config.session_id,
+        )
         backup_scanner = BackupController(LocalFileSystemExplorer(), backup_session)
 
         backup_scanner.read_last_backup = fast_unsafe
         backup_scanner.match_meta_only = fast_unsafe
         backup_scanner.full_prescan = full_prescan
 
-        try:
-            await backup_scanner.backup_all()
-            logger.info("Finalizing backup")
-            await backup_session.complete()
-            logger.info("All done")
-        except:
-            logger.warning("Discarding session")
-            await backup_session.discard()
-            raise
+        await backup_scanner.backup_all()
+        logger.info("Finalizing backup")
+        await backup_session.complete()
+        logger.info("All done")
 
     run_then_cancel(_backup())
+
+
+@main.command()
+@click.argument("SESSION_ID", type=click.UUID)
+def discard_session(session_id: UUID):
+    async def _discard_session():
+        server_session: ServerSession = click.get_current_context().obj
+        try:
+            backup_session = await server_session.resume_backup(session_id=session_id)
+        except NotFoundException as ex:
+            raise click.ClickException(f"Session not found {session_id}") from backup_session
+        logger.info(
+            "Discarding backup session %s %s %s",
+            backup_session.config.session_id,
+            server_session.client_config.date_string(backup_session.config.backup_date),
+            backup_session.config.description,
+        )
+        await backup_session.discard()
+    run_then_cancel(_discard_session())
 
 
 @main.command('list')
