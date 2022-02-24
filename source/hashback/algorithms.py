@@ -1,5 +1,4 @@
 import logging
-from asyncio import gather
 from typing import Dict, Iterable, NamedTuple, Optional
 from uuid import uuid4
 
@@ -163,7 +162,11 @@ class BackupController:
                 else:
                     upload_tasks.append(self._upload_file(explorer, directory.definition, missing_file))
 
-            await gather(*upload_tasks)
+            # Temporarily removing gather as it was resulting in too many files open.
+            # Will add back once a limited gather has been written.
+            #await gather(*upload_tasks)
+            for task in upload_tasks:
+                await task
             # Retry the directory now that all files have been uploaded.
             # We let the server know this replaces the previous request.  Some servers may place a marker on the session
             # preventing us from completing until unsuccessful requests have been replaced.
