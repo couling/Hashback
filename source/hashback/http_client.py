@@ -143,46 +143,36 @@ class ClientBackupSession(protocol.BackupSession):
         return result
 
     async def upload_file_content(self, file_content: Union[protocol.FileReader, bytes], resume_id: UUID,
-                                  resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
+                                  resume_from: Optional[int] = None, is_complete: bool = True) -> Optional[str]:
+
         if isinstance(file_content, bytes):
-            return await self._request(
-                endpoint=http_protocol.UPLOAD_FILE,
-                body=file_content,
-                resume_id=resume_id,
-                resume_from=resume_from,
-                is_complete=is_complete
-            )
+            return await self._upload_file_bytes(file_content, resume_id, resume_from, is_complete)
 
         # TODO detect sparse files and upload in chunks
-        position = resume_from
-        total_size = file_content.file_size
+        # The structure here is a little odd. To determine if this is the last request, we need to read ahead and see if
+        # there's more to send.
         bytes_read = await file_content.read(protocol.READ_SIZE)
-        while bytes_read:
-            new_position = position + len(bytes_read)
-            ref_hash = await self._request(
-                endpoint=http_protocol.UPLOAD_FILE,
-                body=bytes_read,
-                resume_id=resume_id,
-                resume_from=position,
-                is_complete=is_complete if new_position == total_size else False
-            )
-            if new_position == total_size:
-                return ref_hash
-            position = new_position
-            bytes_read = await file_content.read(protocol.READ_SIZE)
-        if is_complete:
-            logger.warning(f"Expected to upload {file_content.file_size} but only managed {position} before EOF. "
-                           f"Perhaps the file changed.")
-            return await self._request(
-                endpoint=http_protocol.UPLOAD_FILE,
-                body=bytes(),
-                resume_id=resume_id,
-                position=position,
-                is_complete=True,
-            )
-        # Here we have reached the end of the content and we do not need to mark the file as complete
-        return None
+        while next_bytes_read := await file_content.read(protocol.READ_SIZE):
+            ref_hash = await self._upload_file_bytes(bytes_read, resume_id, resume_from, False)
+            if ref_hash is not None:
+                raise protocol.ProtocolError(f"Unexpected ref_hash response to {resume_id} but not complete=True")
+            resume_from = len(bytes_read) if resume_from is None else resume_from + len(bytes_read)
+            bytes_read = next_bytes_read
+        return await self._upload_file_bytes(bytes_read, resume_id, resume_from, is_complete)
 
+    async def _upload_file_bytes(self, file_content: bytes, resume_id: UUID, resume_from: Optional[int],
+                                is_complete: Optional[bool]) -> Optional[str]:
+        args = {}
+        if resume_from is not None:
+            args['resume_from'] = resume_from
+
+        return await self._request(
+            endpoint=http_protocol.UPLOAD_FILE,
+            body=file_content,
+            resume_id=resume_id,
+            is_complete=is_complete,
+            **args,
+        )
 
     async def add_root_dir(self, root_dir_name: str, inode: Inode) -> None:
         await self._request(http_protocol.ADD_ROOT_DIR, body=inode, root_dir_name=root_dir_name)

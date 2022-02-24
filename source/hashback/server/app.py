@@ -191,7 +191,7 @@ async def directory_definition(definition: protocol.Directory, replaces: Optiona
 @endpoint(http_protocol.UPLOAD_FILE)
 async def upload_file_content(resume_id: UUID, file: fastapi.UploadFile = fastapi.File(...),
                               session: protocol.BackupSession = fastapi.Depends(backup_session),
-                              resume_from: int = 0, is_complete: bool = True) -> str:
+                              resume_from: Optional[int] = None, is_complete: bool = True) -> str:
     return await session.upload_file_content(
         file_content=file,
         resume_id=resume_id,

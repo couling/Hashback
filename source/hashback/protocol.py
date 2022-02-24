@@ -249,8 +249,8 @@ class BackupSession(Protocol):
         """
 
     @abstractmethod
-    async def upload_file_content(self, file_content: Union[FileReader, bytes], resume_id: UUID, resume_from: int = 0,
-                                  is_complete: bool = True) -> Optional[str]:
+    async def upload_file_content(self, file_content: Union[FileReader, bytes], resume_id: UUID,
+                                  resume_from: Optional[int] = None, is_complete: bool = True) -> Optional[str]:
         """
         Upload a file, or part of a file to the server.  The server will respond with an ID (the hash) for that file.
         If the upload is interrupted, then the backup can resume where it left off by first calling
@@ -273,11 +273,18 @@ class BackupSession(Protocol):
 
         :param file_content: Either a Path pointing to a local file or a readable and seekable BinaryIO.  If path is
             specified then restart logic is inferred
-        :param resume_id: I locally specified ID to use to resume file upload in the vent it fails part way through.
-            WARNING reusing the same resume_id inside the same session will overwrite the previous file.
-        :param resume_from: When resuming a failed upload, this specifies how many bytes of the partial upload to keep.
+        :param resume_id: Locally specified ID to use to resume file upload in the vent it fails part way through.
+            resume_ids exist until a request with is_complete=True completes successfully.  Logically this means
+            a request with is_complete=True and resume_id=None will create the resume_id and destroy it on the server in
+            the same request.
+        :param resume_from: When resuming a partial upload, this specifies how many bytes of the partial upload to keep.
             EG: if this is set to 500 then the first 500 bytes of the partial upload will be kept and all beyond that
-            will be overwritten.  Not this will implicitly cause a seek operation on file_content.
+            will be overwritten.  Note this will implicitly cause a seek operation on file_content.
+            Requests for the same resume_id MUST be sent resume_from order.  Sparse files (if supported by the server)
+            may be created using this feature.
+            This MUST be None on the first upload request for a resume_id.  The server MUST raise a NotFoundException
+            if a non None value is given for a resume ID has not already been sent.  This is to ensure that retrying
+            an is_complete=True request cannot cause damage.
         :param is_complete: If complete is True an ID will be generated and resume_id will be invalidated.  If complete
             is False, no complete ID
         :return: The ref_hash of the newly uploaded file if complete=True or None if complete=False.  Clients may use
@@ -482,6 +489,10 @@ class AccessDeniedException(RequestException):
 
 class NotFoundException(RequestException):
     http_status = 404  # Not Found
+
+
+class AlreadyExistsException(RequestException):
+    http_status = 409
 
 
 class InternalServerError(RequestException):

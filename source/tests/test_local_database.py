@@ -207,3 +207,32 @@ class TestWithBackup:
 
         all_backups = asyncio.get_event_loop().run_until_complete(complete_and_list())
         assert all_backups == [(self.backup_session.config.backup_date, self.backup_session.config.description)]
+
+    @pytest.mark.parametrize('is_complete', (True, False), ids=('complete', 'incomplete'))
+    @pytest.mark.asyncio
+    async def test_resume_non_existent(self, is_complete: bool):
+        with pytest.raises(protocol.NotFoundException):
+            await self.backup_session.upload_file_content(
+                file_content=b"",
+                resume_id=uuid4(),
+                resume_from=0,
+                is_complete=is_complete,
+            )
+
+    @pytest.mark.parametrize('is_complete', (True, False), ids=('complete', 'incomplete'))
+    @pytest.mark.asyncio
+    async def test_resume_non_existent(self, is_complete: bool):
+        resume_id = uuid4()
+        await self.backup_session.upload_file_content(
+            file_content=b"",
+            resume_id=resume_id,
+            resume_from=None,
+            is_complete=False,
+        )
+        with pytest.raises(protocol.AlreadyExistsException):
+            await self.backup_session.upload_file_content(
+                file_content=b"",
+                resume_id=resume_id,
+                resume_from=None,
+                is_complete=is_complete,
+            )

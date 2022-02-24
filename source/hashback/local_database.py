@@ -285,44 +285,47 @@ class LocalDatabaseBackupSession(protocol.BackupSession):
         return protocol.DirectoryDefResponse(ref_hash=directory_hash)
 
     async def upload_file_content(self, file_content: Union[protocol.FileReader, bytes], resume_id: UUID,
-                                  resume_from: int = 0, is_complete: bool = True) -> Optional[str]:
+                                  resume_from: Optional[int] = None, is_complete: bool = True) -> Optional[str]:
         if not self.is_open:
             raise protocol.SessionClosed()
         hash_object = hashlib.sha256()
         temp_file = self._temp_path(resume_id)
-        complete_partial = is_complete and resume_from > 0
-        temp_file.touch()
-        with await AsyncFile.open(temp_file, 'r+') as target:
-            # If we are completing the file we must hash it.
-            if complete_partial:
-                logger.debug(f"Completing file; re-reading partial for {resume_id}")
-                # TODO sanity check the request to ensure complete_partial always writes to the end of the file
-                target.seek(0, os.SEEK_SET)
-                while target.tell() < resume_from:
-                    bytes_read = await target.read(min(protocol.READ_SIZE, resume_from - target.tell()))
-                    if not bytes_read:
-                        # TODO prevent memory DOS attack. Limit the chunks this can be fed in for.
-                        bytes_read = bytes(resume_from - target.tell())
-                        target.seek(resume_from, os.SEEK_SET)
-                    hash_object.update(bytes_read)
-                assert target.tell() == resume_from
-            # If not complete then we just seek to the requested resume_from position
-            else:
-                target.seek(resume_from, os.SEEK_SET)
-
-            # Write the file content
-            if isinstance(file_content, bytes):
-                if is_complete:
-                    hash_object.update(file_content)
-                await target.write(file_content)
-            else:
-                bytes_read = await file_content.read(protocol.READ_SIZE)
-                while bytes_read:
+        try:
+            with await AsyncFile.open(temp_file, 'x' if resume_from is None else 'r+') as target:
+                if resume_from is not None:
+                    # If we are completing the file we must hash it.
                     if is_complete:
-                        hash_object.update(bytes_read)
-                    await target.write(bytes_read)
-                    bytes_read = await file_content.read(protocol.READ_SIZE)
+                        logger.debug(f"Completing file; re-reading partial for {resume_id}")
+                        # TODO sanity check the request to ensure complete_partial always writes to the end of the file
+                        target.seek(0, os.SEEK_SET)
+                        while target.tell() < resume_from:
+                            bytes_read = await target.read(min(protocol.READ_SIZE, resume_from - target.tell()))
+                            if not bytes_read:
+                                # TODO prevent memory DOS attack. Limit the chunks this can be fed in for.
+                                bytes_read = bytes(resume_from - target.tell())
+                                target.seek(resume_from, os.SEEK_SET)
+                            hash_object.update(bytes_read)
+                        assert target.tell() == resume_from
+                    # If not complete then we just seek to the requested resume_from position
+                    else:
+                        target.seek(resume_from, os.SEEK_SET)
 
+                # Write the file content
+                if isinstance(file_content, bytes):
+                    if is_complete:
+                        hash_object.update(file_content)
+                    await target.write(file_content)
+                else:
+                    bytes_read = await file_content.read(protocol.READ_SIZE)
+                    while bytes_read:
+                        if is_complete:
+                            hash_object.update(bytes_read)
+                        await target.write(bytes_read)
+                        bytes_read = await file_content.read(protocol.READ_SIZE)
+        except FileExistsError as ex:
+            raise protocol.AlreadyExistsException(f"Resume id already exists {resume_id}") from ex
+        except FileNotFoundError as ex:
+            raise protocol.NotFoundException(f"Resume id {resume_id} not found") from ex
         if not is_complete:
             return None
 

@@ -245,7 +245,7 @@ class TestPassThroughBackupSession(BaseTestPassThrough):
 
         assert result == mock_ref_hash
         if isinstance(file_content, MockFileReader):
-            assert len(calls) == len(file_content.parts) + (1 if file_content.streaming and is_complete else 0)
+            assert len(calls) == len(file_content.parts)
             for call, expected_content in zip(calls, file_content.parts):
                 assert call['resume_id'] == resume_id
                 assert call['file_content'] == expected_content
