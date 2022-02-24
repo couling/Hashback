@@ -3,9 +3,9 @@ import datetime
 import itertools
 import os
 import random
+import stat
 from pathlib import Path
 from typing import Dict, Optional
-import stat
 
 import pytest
 
@@ -126,7 +126,8 @@ async def test_filter_pure_exclude(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_filter_exclude_exception(tmp_path: Path):
+@pytest.mark.parametrize('include_path', ('c/d', 'c/d/e'), ids=('child', 'grandchild'))
+async def test_filter_exclude_exception(tmp_path: Path, include_path: str):
     hidden = tmp_path / 'c' / 'd' / 'e' / 'hidden'
     hidden.parent.mkdir(parents=True)
     hidden.touch(exist_ok=False)
@@ -140,7 +141,7 @@ async def test_filter_exclude_exception(tmp_path: Path):
     file_explorer = LocalFileSystemExplorer()
     filters = (
         protocol.Filter(filter=protocol.FilterType.EXCLUDE, path='c'),
-        protocol.Filter(filter=protocol.FilterType.INCLUDE, path='c/d/e'),
+        protocol.Filter(filter=protocol.FilterType.INCLUDE, path=include_path),
     )
     explorer = file_explorer(tmp_path, filters)
     async for name, inode in explorer.iter_children():
