@@ -242,7 +242,7 @@ class LocalDirectoryExplorer(protocol.DirectoryExplorer):
             child = self._base_path / child_name
             if exception.filter_type is protocol.FilterType.INCLUDE:
                 # Exception to include this child.
-                if not self._should_pattern_ignore(child):
+                if self._should_pattern_ignore(child):
                     logger.warning("File explicitly included but then excluded by pattern %s", child)
                 elif child.exists():
                     yield child_name, self._stat_child(child_name)
