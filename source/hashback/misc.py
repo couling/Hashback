@@ -145,3 +145,78 @@ class ContextCloseMixin:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+
+class FairSemaphore:
+    """
+    Semaphore with strictly controlled order.
+
+    By default this will act
+    """
+
+    _queue: Deque[asyncio.Future]
+    _value: int
+    _fifo: bool
+
+    def __init__(self, value: int, fifo=True):
+        """
+        Initial value of the semaphore
+        :param value: Initial value for the semaphore
+        :param fifo:
+        """
+        self._value = value
+        self._queue = collections.deque()
+        self._fifo = fifo
+
+    def locked(self) -> bool:
+        return not self._value
+
+    async def acquire(self):
+        if self._value:
+            self._value -= 1
+        else:
+            loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+            future = loop.create_future()
+            self._queue.append(future)
+
+            try:
+                await future
+            except:
+                # This condition happens when the future's result was set but the task was cancelled
+                # In other words another task completed and released this one... but this one got cancelled before it
+                # could do anything.  As a result we need to release another.
+                if not future.cancelled():
+                    self.release()
+                # else:
+                # But if we were NOT released then we do not have the right to release another.
+                raise
+
+    def release(self):
+        # Tasks can get cancelled while in the queue.
+        # Naively you would expect their _acquire() code to remove them from the queue.  But that doesn't always work
+        # because the event loop might not have given them chance execute the CancelledError except clause yet.
+        # It's absolutely unavoidable that there could be cancelled tasks waiting on this queue.
+        # When that happen the done() state of the future goes to True...
+        while self._queue:
+            future = self._queue.popleft() if self._fifo else self._queue.pop()
+            if not future.done():
+                future.set_result(None)
+                break
+            # ... we discard any task which is already "done" because
+        else:
+            self._value += 1
+
+    async def __aenter__(self):
+        await self.acquire()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.release()
+
+
+async def gather_all_or_nothing(*futures: asyncio.Future):
+    try:
+        return asyncio.gather(*futures)
+    except:
+        for future in futures:
+            future.cancel()
+        raise
