@@ -51,12 +51,12 @@ async def existing_backups(configured_client: Settings, local_database: LocalDat
 
 
 def test_json_list_backups_returns_no_results(cli_runner):
-    result = cli_runner('list', '--json')
+    result = cli_runner('list-backups', '--json')
     assert json.loads(result.stdout) == []
 
 
 def test_json_list_backups_returns_results(cli_runner, configured_client: Settings, existing_backups, local_database):
-    result = cli_runner('list', '--json')
+    result = cli_runner('list-backups', '--json')
     result_backups = json.loads(result.stdout)
 
     # Dates should be translated from client time into UTC and aligned to the backup granularity as they are created
@@ -76,7 +76,7 @@ def test_json_list_backups_returns_results(cli_runner, configured_client: Settin
 
 
 def test_list_backups_returns_results(cli_runner, configured_client: Settings, existing_backups, local_database):
-    result = cli_runner('list')
+    result = cli_runner('list-backups')
 
     # Dates should be translated from client time into UTC and aligned to the backup granularity as they are created
     # ... then translated into the client's timezone when listed
@@ -88,23 +88,23 @@ def test_list_backups_returns_results(cli_runner, configured_client: Settings, e
 
 
 def test_list_backups_returns_no_results(cli_runner):
-    result = cli_runner('list')
+    result = cli_runner('list-backups')
     assert "No backups found!" in result.stdout
 
 
 def test_describe_listed_backup(cli_runner, existing_backups, local_database):
-    result = json.loads(cli_runner('list', '--json').stdout)
+    result = json.loads(cli_runner('list-backups', '--json').stdout)
     backup_date_time = result[-1]['date_time']
 
-    result = cli_runner('describe', backup_date_time)
+    result = cli_runner('describe-backup', backup_date_time)
     assert backup_date_time in result.stdout
     assert existing_backups[0][1] in result.stdout
 
 
 def test_describe_listed_backup_json(cli_runner, existing_backups, local_database):
-    result = json.loads(cli_runner('list', '--json').stdout)
+    result = json.loads(cli_runner('list-backups', '--json').stdout)
     backup_date_time = result[-1]['date_time']
 
-    result = json.loads(cli_runner('describe', '--json', backup_date_time).stdout)
+    result = json.loads(cli_runner('describe-backup', '--json', backup_date_time).stdout)
     assert result['backup_date'] == backup_date_time
     assert result['description'] == existing_backups[0][1]

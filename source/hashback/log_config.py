@@ -87,11 +87,11 @@ class PreLoggingHandler(logging.Handler):
         cls.global_buffer.clear()
         for message in messages:
             logging.getLogger(message.name).log(
-                level=message.levelno,
-                msg=message.msg,
+                message.levelno,
+                message.msg,
+                *message.args,
                 exc_info=message.exc_info,
                 stack_info=message.stack_info,
-                *message.args
             )
 
 

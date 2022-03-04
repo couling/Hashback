@@ -11,7 +11,7 @@ def test_configure_minimum(cli_runner, user_config_path: Path):
     client_id = str(uuid4())
     db_url = '/not-exists'
 
-    cli_runner('configure', '--database-url',  db_url, '--client-id', client_id)
+    cli_runner('config', 'set', '--database-url',  db_url, '--client-id', client_id)
 
     saved_settings = Settings.parse_file(user_config_path)
     assert saved_settings.client_id == client_id
@@ -23,7 +23,7 @@ def test_configure_saves_to_correct_location(cli_runner, user_config_path: Path,
     client_id = str(uuid4())
     db_url = '/not-exists'
 
-    cli_runner('configure', '--database-url', db_url, '--client-id', client_id, target)
+    cli_runner('config', 'set', '--database-url', db_url, '--client-id', client_id, target)
 
     if target == '--site':
         correct_path = site_config_path
@@ -42,7 +42,8 @@ def test_configure_credentials(cli_runner, user_config_path: Path, site_config_p
     client_id = str(uuid4())
     db_url = '/not-exists'
 
-    cli_runner('configure', '--database-url', db_url, '--client-id', client_id, target, '--credentials', credentials)
+    cli_runner('config', 'set', '--database-url', db_url, '--client-id', client_id, target, '--credentials',
+               credentials)
 
     config_path = site_config_path if target == '--site' else user_config_path
     saved_settings = Settings.parse_file(config_path)
@@ -61,7 +62,7 @@ def test_configure_credentials(cli_runner, user_config_path: Path, site_config_p
     ('--client-id', str(uuid4())),
 ])
 def test_minimum_validation(cli_runner, args: Collection[str]):
-    result = cli_runner('configure', exit_code=1, *args)
+    result = cli_runner('config', 'set', exit_code=1, *args)
     assert "validation" in result.stderr and "error" in result.stderr
 
 
@@ -76,7 +77,7 @@ def test_configure_log_level(cli_runner, user_config_path: Path):
     with user_config_path.open('w') as file:
         file.write(settings.json(exclude_unset=True, indent=True))
 
-    cli_runner('configure', '--log-level', new_level)
+    cli_runner('config', 'set', '--log-level', new_level)
 
     settings = Settings.parse_file(user_config_path)
     assert settings.logging.log_level == new_level
@@ -93,7 +94,7 @@ def test_configure_log_unit_level(cli_runner, user_config_path):
     with user_config_path.open('w') as file:
         file.write(settings.json(exclude_unset=True, indent=True))
 
-    cli_runner('configure', '--log-unit-level', 'foo=WARNING', '--log-unit-level', 'bar=DEBUG')
+    cli_runner('config', 'set', '--log-unit-level', 'foo=WARNING', '--log-unit-level', 'bar=DEBUG')
 
     settings = Settings.parse_file(user_config_path)
     assert settings.logging.log_unit_levels == {
@@ -114,7 +115,7 @@ def test_updating_levels_leaves_others_in_place(cli_runner, user_config_path):
     with user_config_path.open('w') as file:
         file.write(settings.json(exclude_defaults=True, indent=True))
 
-    cli_runner('configure', '--log-unit-level', 'foo=WARNING')
+    cli_runner('config', 'set', '--log-unit-level', 'foo=WARNING')
 
     settings = Settings.parse_file(user_config_path)
     assert settings.logging.log_unit_levels == {
@@ -136,7 +137,7 @@ def test_deleting_levels(cli_runner, user_config_path):
     with user_config_path.open('w') as file:
         file.write(settings.json(exclude_defaults=True, indent=True))
 
-    cli_runner('configure', '--log-unit-level', 'foo=')
+    cli_runner('config', 'set', '--log-unit-level', 'foo=')
 
     settings = Settings.parse_file(user_config_path)
     assert settings.logging.log_unit_levels == {
@@ -159,7 +160,7 @@ def test_incorrect_level_name_raises_exception(cli_runner, user_config_path, arg
     with user_config_path.open('w') as file:
         file.write(settings.json(exclude_defaults=True, indent=True))
 
-    result = cli_runner('configure', *args, exit_code=1)
+    result = cli_runner('config', 'set', *args, exit_code=1)
 
     assert 'Unknown level name ' in result.stderr
     settings = Settings.parse_file(user_config_path)

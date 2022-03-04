@@ -7,7 +7,7 @@ import os
 import signal
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Collection, Coroutine, Dict, Optional, Union
+from typing import Any, Collection, Dict, Union, Deque
 
 import appdirs
 
@@ -33,24 +33,46 @@ def clean_shutdown(num, _):
     raise KeyboardInterrupt(f"Signal '{signal.Signals(num).name}'")
 
 
-def run_then_cancel(future: Optional[Union[asyncio.Future, Coroutine]] = None,
-                    loop: Optional[asyncio.BaseEventLoop] = None):
+class CleanEventLoop:
+    """
+    Context manager to run something in an event loop cleanly.  On exit this will clean up the event loop
+    """
+    def __init__(self, loop=None):
+        if loop is None:
+            self._loop = asyncio.get_event_loop()
+
+    def __enter__(self):
+        return self._loop
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        cleanup_event_loop(self._loop)
+
+
+def cleanup_event_loop(loop=None):
+    """
+    There can still be running tasks on the event loop.  Either run_until_complete has completed but other tasks on the
+    loop have not, or some exception tripped us out of running the loop such as KeyboardInterrupt. Whatever the reason
+    we want to cleanly cancel all remaining tasks (that's the point of this function). To do that we MUST run the event
+    loop after cancelling every task.
+    """
     if loop is None:
         loop = asyncio.get_event_loop()
-    try:
-        if future is None:
-            return loop.run_forever()
-        return loop.run_until_complete(future)
-    finally:
-        # There can still be running tasks on the event loop at this point.
-        # Either 'future' has completed but other tasks on the loop have not, or some exception tripped us out of
-        # running the loop.
-        # Whatever the reason we want to cleanly cancel all remaining tasks (that's the point of this function).
-        # To do that we MUST run the event loop after cancelling every task
-        all_tasks = asyncio.all_tasks(loop)
+
+    all_tasks = asyncio.all_tasks(loop)
+    while all_tasks:
         for task in all_tasks:
             task.cancel()
         loop.run_until_complete(asyncio.gather(*all_tasks, return_exceptions=True))
+        # Theoretically a cancelled task can create new tasks in the finally: or except: clauses so we need to cancel
+        # those too.  Yes malicious code could make us hang here. There's no way to avoid that AND  correctly clean up.
+        all_tasks = asyncio.all_tasks(loop)
+
+
+def wrapped_async(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        asyncio.get_event_loop().run_until_complete(func(*args, **kwargs))
+    return wrapper
 
 
 # pylint: disable=no-value-for-parameter
@@ -78,6 +100,7 @@ class SettingsConfig:
             config_path = cls.user_config_path()
 
         load_paths = [cls.site_config_path(), config_path]
+        logger.debug("Loading settings from '%s'", "' and '".join(str(load_path) for load_path in load_paths))
         loaders = [functools.partial(cls._load_settings, path) for path in load_paths if path.is_file()]
 
         return (

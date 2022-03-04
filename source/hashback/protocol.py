@@ -402,7 +402,7 @@ class ServerSession(Protocol):
         :param inode: The handle to the file
         """
 
-    async def close(self):
+    def close(self):
         """
         Release any resources
         """
