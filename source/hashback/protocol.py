@@ -1,3 +1,4 @@
+import asyncio
 import enum
 import functools
 import hashlib
@@ -621,7 +622,10 @@ async def async_hash_content(content: FileReader):
     """
     hash_object = HashType()
     bytes_read = await content.read(READ_SIZE)
+    loop = asyncio.get_running_loop()
     while bytes_read:
-        hash_object.update(bytes_read)
+        # This should let the hash process run in a separate thread.
+        # This should not lock up the GIL
+        await loop.run_in_executor(None, hash_object.update, bytes_read)
         bytes_read = await content.read(READ_SIZE)
     return hash_object.hexdigest()
