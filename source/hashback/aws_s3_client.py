@@ -301,7 +301,7 @@ class S3MultipartUpload:
         self._client = misc.AsyncThreadWrapper(backup_session._session._database._client)
 
     async def upload_part(self, position: int, content: bytes):
-        total_content = self._upload_size + (self._cache or 0)
+        total_content = self._upload_size + len(self._cache or bytes())
         if position != total_content:
             raise ValueError(f"Cannot add content out of sequence {total_content} for {self._file_key}")
         new_hash = self._hash.copy()
