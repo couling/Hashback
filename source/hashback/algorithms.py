@@ -3,10 +3,8 @@ import logging
 from typing import Dict, Iterable, NamedTuple, Optional, Tuple
 from uuid import uuid4
 
-import itertools
-
 from . import protocol
-from .misc import FairSemaphore, str_exception, gather_all_or_nothing
+from .misc import FairSemaphore, gather_all_or_nothing
 
 logger = logging.getLogger(__name__)
 

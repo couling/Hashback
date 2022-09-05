@@ -133,6 +133,7 @@ class S3Session(protocol.ServerSession, closing):
         # The wrapper will run any calls in another thread allowing them to be awaited.
         self._database = misc.AsyncThreadWrapper(database)
         self._client_config = client_config
+        self._rate_limit = misc.FairSemaphore(2)
 
     @property
     def client_config(self) -> ClientConfiguration:
@@ -223,18 +224,19 @@ class S3BackupSession(protocol.BackupSession):
 
     async def upload_file_content(self, file_content: Union[FileReader, bytes], resume_id: UUID,
                                   resume_from: Optional[int] = None, is_complete: bool = True) -> Optional[str]:
-        if resume_id not in self._partial_uploads:
-            upload = S3MultipartUpload(self, resume_id)
-            self._partial_uploads[resume_id] = upload
-        else:
-            upload = self._partial_uploads[resume_id]
-        if isinstance(file_content, bytes):
-            await upload.upload_part(resume_from or 0, file_content)
-        else:
-            offset = 0
-            while bytes_read := await file_content.read(protocol.READ_SIZE):
-                await upload.upload_part((resume_from or 0) + offset, bytes_read)
-                offset += len(bytes_read)
+        async with self._session._rate_limit:
+            if resume_id not in self._partial_uploads:
+                upload = S3MultipartUpload(self, resume_id)
+                self._partial_uploads[resume_id] = upload
+            else:
+                upload = self._partial_uploads[resume_id]
+            if isinstance(file_content, bytes):
+                await upload.upload_part(resume_from or 0, file_content)
+            else:
+                offset = 0
+                while bytes_read := await file_content.read(protocol.READ_SIZE):
+                    await upload.upload_part((resume_from or 0) + offset, bytes_read)
+                    offset += len(bytes_read)
         if is_complete:
             result = await upload.complete()
             del self._partial_uploads[resume_id]
