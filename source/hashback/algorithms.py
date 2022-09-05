@@ -161,6 +161,7 @@ class BackupController:
 
     async def _hash_file(self, explorer: protocol.DirectoryExplorer, child_name: str):
         async with self._semaphore:
+            logger.debug("hashing %s", explorer.get_path(child_name))
             # The explorer will correctly handle reading the content of links etc.
             # Opening a symlink will return a reader to read the link itself, NOT the file it links to.
             with await explorer.open_child(child_name) as file:
