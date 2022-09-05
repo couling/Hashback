@@ -239,12 +239,12 @@ class S3BackupSession(protocol.BackupSession):
                 while bytes_read := await file_content.read(protocol.READ_SIZE):
                     await upload.upload_part((resume_from or 0) + offset, bytes_read)
                     offset += len(bytes_read)
-        if is_complete:
-            result = await upload.complete()
-            del self._partial_uploads[resume_id]
-            return result
-        else:
-            return
+            if is_complete:
+                result = await upload.complete()
+                del self._partial_uploads[resume_id]
+                return result
+            else:
+                return
 
     async def add_root_dir(self, root_dir_name: str, inode: Inode) -> None:
         self._roots[root_dir_name] = inode
