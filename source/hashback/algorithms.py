@@ -75,14 +75,14 @@ class BackupController:
         :param last_backup: The last backup definition if available.
         """
         directory_definition = await self._scan_directory(explorer, last_backup)
-        if last_backup is None or last_backup.hash != directory_definition.definition.hash():
+        if last_backup is None or last_backup.hash != directory_definition.definition.hash().ref_hash:
             return await self._upload_directory(explorer, directory_definition)
         logger.debug("Skipping %s directory not changed", explorer.get_path(None))
         return last_backup.hash
 
     async def _scan_directory(self, explorer: protocol.DirectoryExplorer,
                               last_backup: Optional[protocol.Inode]) -> ScanResult:
-        children, hash_result_tasks, scan_tasks = await self._spawn_directory_scan_tasks(explorer, last_backup)
+        children, hash_result_tasks, scan_tasks = await self._spawn_scan_directory_tasks(explorer, last_backup)
 
         await gather_all_or_nothing(*scan_tasks.values(), *hash_result_tasks.values())
 
@@ -93,7 +93,7 @@ class BackupController:
             child_scan_results = {}
             for child_name, task in scan_tasks.items():
                 result: ScanResult = task.result()
-                children[child_name].hash = result.definition.hash()
+                children[child_name].hash = result.definition.hash().ref_hash
                 child_scan_results[child_name] = result
 
             return ScanResult(

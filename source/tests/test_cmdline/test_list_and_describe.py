@@ -13,7 +13,7 @@ from hashback.protocol import ClientConfiguration, Directory, FileType, Inode
 
 @pytest.fixture(autouse=True)
 def configured_client(local_database, client_config: ClientConfiguration, user_config_path: Path) -> Settings:
-    local_database.create_client(client_config)
+    local_database.save_client_config(client_config)
     user_config_path.parent.mkdir(parents=True, exist_ok=True)
 
     client_settings = Settings(

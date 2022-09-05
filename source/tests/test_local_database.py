@@ -24,7 +24,7 @@ def local_database_configuration() -> LocalDatabase.Configuration:
 @pytest.fixture(scope='function')
 def local_database(tmp_path: Path, local_database_configuration, client_config) -> LocalDatabase:
     database = LocalDatabase.create_database(tmp_path / 'database', local_database_configuration)
-    database.create_client(client_config)
+    database.save_client_config(client_config)
     return database
 
 

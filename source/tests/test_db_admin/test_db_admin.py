@@ -33,7 +33,7 @@ def test_add_new_root(cli_runner, local_db_path: Path, refer_by: str):
     client_config = ClientConfiguration(
         client_name=client_name,
     )
-    database.create_client(client_config)
+    database.save_client_config(client_config)
     reference = client_name if refer_by == 'name' else str(client_config.client_id)
 
     cli_runner('add-directory', reference, 'some_root', '/foo/bar')
@@ -53,7 +53,7 @@ def test_add_new_root(cli_runner, local_db_path: Path, refer_by: str):
 def test_add_root_with_filters(cli_runner, local_db_path, option: str, filter_type: FilterType):
     database = LocalDatabase(local_db_path)
     client_name = 'test_client'
-    database.create_client(ClientConfiguration(client_name=client_name))
+    database.save_client_config(ClientConfiguration(client_name=client_name))
 
     cli_runner('add-directory', client_name, 'some_root', '/foo/bar', option, 'run', option, 'var/lib')
 

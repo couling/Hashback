@@ -35,7 +35,7 @@ def local_db(local_db_path: Path) -> LocalDatabase:
     result = LocalDatabase(local_db_path)
     client_config = ClientConfiguration(client_name=TEST_CLIENT_NAME)
     client_config.backup_directories[TEST_ROOT_NAME] = ClientConfiguredBackupDirectory(base_path="/")
-    result.create_client(client_config)
+    result.save_client_config(client_config)
     return LocalDatabase(local_db_path)
 
 

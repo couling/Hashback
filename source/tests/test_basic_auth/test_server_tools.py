@@ -52,7 +52,7 @@ def local_db(tmp_path: Path) -> LocalDatabase:
 def client_id(local_db: LocalDatabase) -> UUID:
     client_id = uuid4()
 
-    local_db.create_client(protocol.ClientConfiguration(
+    local_db.save_client_config(protocol.ClientConfiguration(
         client_name=CLIENT_NAME,
         client_id=client_id,
     ))

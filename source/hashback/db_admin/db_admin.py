@@ -1,10 +1,11 @@
 import logging
 from pathlib import Path
+from urllib.parse import urlparse
+from copy import deepcopy
 
 import click
 
 from .. import protocol
-from ..local_database import LocalDatabase
 from ..log_config import setup_logging
 from ..misc import register_clean_shutdown
 
@@ -20,11 +21,17 @@ def main():
 
 
 @click.group()
-@click.argument("DATABASE", type=click.Path(path_type=Path, file_okay=False), envvar="BACKUP_DATABASE")
+@click.argument("DATABASE", envvar="BACKUP_DATABASE")
 @click.pass_context
-def click_main(ctx: click.Context, database: Path):
+def click_main(ctx: click.Context, database: str):
     if ctx.invoked_subcommand != 'create':
-        ctx.obj = LocalDatabase(database)
+        url = urlparse(database)
+        if url.scheme in ('', 'file'):
+            from ..local_database import LocalDatabase
+            ctx.obj = LocalDatabase(Path(url.path))
+        elif url.scheme == 's3':
+            from ..aws_s3_client import S3Database
+            ctx.obj = S3Database(bucket_name=url.hostname, directory=url.path[1:])
     else:
         ctx.obj = database
 
@@ -33,6 +40,7 @@ def click_main(ctx: click.Context, database: Path):
 @click.option("--store-split-count", type=click.INT, default=2)
 @click.pass_obj
 def create(database: Path, **db_config):
+    from ..local_database import LocalDatabase
     config = LocalDatabase.Configuration(**db_config)
     logger.info("Creating database %s", database)
     try:
@@ -44,12 +52,10 @@ def create(database: Path, **db_config):
 @click_main.command('add-client')
 @click.argument('CLIENT_NAME', envvar="CLIENT_NAME")
 @click.pass_obj
-def add_client(database: LocalDatabase, client_name: str):
-    config = protocol.ClientConfiguration(
-        client_name=client_name,
-    )
+def add_client(database: protocol.BackupDatabase, client_name: str):
+    config = protocol.ClientConfiguration(client_name=client_name)
     try:
-        database.create_client(config)
+        database.save_client_config(config)
     except FileExistsError as ex:
         raise click.ClickException(f"Client '{client_name}' already exists") from ex
     logger.info("Created client %s", config.client_id)
@@ -63,8 +69,8 @@ def add_client(database: LocalDatabase, client_name: str):
 @click.option('--exclude', multiple=True)
 @click.option('--pattern-ignore', multiple=True)
 @click.pass_obj
-def add_root(database: LocalDatabase, client_name: str, root_name: str, root_path: str, **options):
-    client = database.open_client_session(client_id_or_name=client_name)
+def add_root(database: protocol.BackupDatabase, client_name: str, root_name: str, root_path: str, **options):
+    client_config = database.load_client_config(client_id_or_name=client_name)
     new_dir = protocol.ClientConfiguredBackupDirectory(base_path=root_path)
     for path in options['include']:
         new_dir.filters.append(protocol.Filter(filter=protocol.FilterType.INCLUDE, path=path))
@@ -72,5 +78,6 @@ def add_root(database: LocalDatabase, client_name: str, root_name: str, root_pat
         new_dir.filters.append(protocol.Filter(filter=protocol.FilterType.EXCLUDE, path=path))
     for pattern in options['pattern_ignore']:
         new_dir.filters.append(protocol.Filter(filter=protocol.FilterType.PATTERN_EXCLUDE, path=pattern))
-    client.client_config.backup_directories[root_name] = new_dir
-    client.save_config()
+    new_config = deepcopy(client_config)
+    new_config.backup_directories[root_name] = new_dir
+    database.save_client_config(new_config)

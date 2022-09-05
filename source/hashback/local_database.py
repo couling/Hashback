@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple, Union
 from uuid import UUID, uuid4
+from copy import deepcopy
 
 from pydantic import BaseModel
 
@@ -29,7 +30,7 @@ STORE_DIR = 'store'
 DIR_SUFFIX = ".d"
 
 
-class LocalDatabase:
+class LocalDatabase(protocol.BackupDatabase):
     class Configuration(BaseModel):
         store_split_count = 1
         store_split_size = 2
@@ -43,6 +44,18 @@ class LocalDatabase:
     @property
     def path(self) -> Path:
         return self._base_path
+
+    def load_client_config(self, client_id_or_name: str) -> protocol.ClientConfiguration:
+        try:
+            client_id = UUID(client_id_or_name)
+            client_path = self._base_path / CLIENT_DIR / str(client_id)
+        except ValueError:
+            client_path = self._base_path / CLIENT_DIR / client_id_or_name
+            if client_path.is_symlink():
+                client_id = os.readlink(client_path)
+                client_path = self._base_path / CLIENT_DIR / client_id
+        with (client_path / _CONFIG_FILE).open('r') as file:
+            return protocol.ClientConfiguration.parse_raw(file.read())
 
     def save_config(self):
         with (self._base_path / _CONFIG_FILE).open('w') as file:
@@ -69,12 +82,16 @@ class LocalDatabase:
         split = [ref_hash[x:x+split_size] for x in range(0, split_count * split_size, split_size)]
         return self._base_path.joinpath(STORE_DIR, *split, ref_hash)
 
-    def create_client(self, client_config: protocol.ClientConfiguration) -> protocol.ServerSession:
+    def save_client_config(self, client_config: protocol.ClientConfiguration) -> protocol.ServerSession:
         (self._base_path / CLIENT_DIR).mkdir(exist_ok=True, parents=True)
         client_name_path = self._base_path / CLIENT_DIR / client_config.client_name
-        client_name_path.symlink_to(str(client_config.client_id))
         client_path = self._base_path / CLIENT_DIR / str(client_config.client_id)
-        client_path.mkdir(exist_ok=False, parents=True)
+        if client_name_path.is_symlink():
+            if client_path.readlink().name != client_path.name:
+                raise protocol.AlreadyExistsException(f"Client with name '{client_name_path.name}' exists")
+        else:
+            client_name_path.symlink_to(str(client_config.client_id))
+        client_path.mkdir(exist_ok=True, parents=True)
         with (client_path / _CONFIG_FILE).open('w') as file:
             file.write(client_config.json(indent=True))
         return LocalDatabaseServerSession(self, client_path)
@@ -112,10 +129,6 @@ class LocalDatabaseServerSession(protocol.ServerSession):
         self._client_path = client_path
         with (client_path / _CONFIG_FILE).open('r') as file:
             self.client_config = protocol.ClientConfiguration.parse_raw(file.read())
-
-    def save_config(self):
-        with (self._client_path / _CONFIG_FILE).open('w') as file:
-            file.write(self.client_config.json(indent=True))
 
     async def start_backup(self, backup_date: datetime, allow_overwrite: bool = False,
                            description: Optional[str] = None) -> protocol.BackupSession:

@@ -408,6 +408,38 @@ class ServerSession(Protocol):
         """
 
 
+class BackupDatabase(Protocol):
+    """
+    Represents a backup database.
+
+    Databases can open backup sessions but they differ subtally from other clients.  Databases presume there is direct
+    (admin) access and so do not require user authentication to access.  Elsewhere the ServerSession can only be
+    accessed with user credentials
+
+    So Databases are also the only way to make administrative changes
+    """
+
+    def open_client_session(self, client_id_or_name: str) -> "ServerSession":
+        """
+        Open a server session for a client
+        """
+
+    def save_client_config(self, client_config: ClientConfiguration) -> ServerSession:
+        """
+        Create a new
+        """
+
+    def iter_clients(self) -> Iterable[ClientConfiguration]:
+        """
+        Iterate over the clients configured in this DB
+        """
+
+    def load_client_config(self, client_id_or_name: str) -> ClientConfiguration:
+        """
+        Load client configuration for one client.
+        """
+
+
 class DirectoryExplorer(Protocol):
 
     @abstractmethod
@@ -556,7 +588,6 @@ def normalize_backup_date(backup_date: datetime, backup_granularity: timedelta, 
     Normalize a backup date to the given granularity. EG: if granularity is set to 1 day, the backup_date is set to
     midnight of that same day.  If granularity is set to 1 hour, then backup_date is set to the start of that hour.
     """
-    assert backup_date.tzinfo is not None
     timestamp = backup_date.timestamp()
     timestamp -= timestamp % backup_granularity.total_seconds()
     return datetime.fromtimestamp(timestamp, client_timezone)
