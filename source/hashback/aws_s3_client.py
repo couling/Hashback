@@ -3,6 +3,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple, Type, TypeVar, Union
 from uuid import UUID, uuid4
+import logging
 import pydantic
 
 import boto3
@@ -23,6 +24,7 @@ _FILES = "files"
 
 _T = TypeVar("_T")
 
+logger = logging.getLogger(__name__)
 
 class Credentials(pydantic.BaseModel):
     profile_name: Optional[str] = None
@@ -331,6 +333,7 @@ class S3MultipartUpload:
             )
             self._upload_id = response['UploadId']
 
+        logger.debug("Uploading part %s - %s", len(self._upload_parts), self._upload_size + len(self._cache))
         response = await self._client.upload_part(
             Bucket=self._bucket,
             Key=self._file_key,
