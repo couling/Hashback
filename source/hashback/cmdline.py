@@ -335,12 +335,19 @@ async def _create_s3_client(settings: Settings) -> ServerSession:
     logger.debug("Loading s3 client")
     # pylint: disable=import-outside-toplevel
     from . import aws_s3_client
+
+    credentials_path = settings.credentials_absolute_path()
+    if credentials_path is not None:
+        credentials = aws_s3_client.Credentials.parse_file(credentials_path)
+    else:
+        credentials = aws_s3_client.Credentials()
+
     url = urlparse(settings.database_url)
     bucket = url.hostname
     path = url.path
     if path.startswith("/"):
         path = path[1:]
-    return aws_s3_client.S3Database(bucket_name=bucket, directory=path).open_client_session(
+    return aws_s3_client.S3Database(bucket_name=bucket, directory=path, credentials=credentials).open_client_session(
         client_id_or_name=settings.client_id,
     )
 

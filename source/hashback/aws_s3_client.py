@@ -3,6 +3,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple, Type, TypeVar, Union
 from uuid import UUID, uuid4
+import pydantic
 
 import boto3
 import pydantic
@@ -23,15 +24,23 @@ _FILES = "files"
 _T = TypeVar("_T")
 
 
+class Credentials(pydantic.BaseModel):
+    profile_name: Optional[str] = None
+    region_name: Optional[str] = None
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+
+
+
 class S3Database(protocol.BackupDatabase):
 
     min_upload_size = min(protocol.READ_SIZE, (1024 ** 2) * 5)
 
-    def __init__(self, bucket_name: str, directory: str = ""):
+    def __init__(self, bucket_name: str, directory: str = "", credentials: Credentials = Credentials()):
         super().__init__(self)
         self._bucket_name = bucket_name
         self._prefix = directory + "/" if directory and directory[-1] != "/" else directory
-        self._client = boto3.client("s3")
+        self._client = boto3.Session(**credentials.dict()).client("s3")
 
     def open_client_session(self, client_id_or_name: str) -> protocol.ServerSession:
         configuration = self.load_client_config(client_id_or_name)
