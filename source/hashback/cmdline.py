@@ -1,7 +1,7 @@
 import json
 import logging.config
 import logging.handlers
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import List, Optional
@@ -182,8 +182,7 @@ async def backup(description: Optional[str],
     The configuration of what to backup is stored on the server.
     """
     settings: Settings = click.get_current_context().obj
-    server_session = await create_client(settings)
-    try:
+    async with await create_client(settings) as server_session:
         if resume is not None:
             backup_session = await server_session.resume_backup(session_id=resume)
         else:
@@ -214,8 +213,6 @@ async def backup(description: Optional[str],
         logger.info("Finalizing backup")
         await backup_session.complete()
         logger.info("All done")
-    finally:
-        server_session.close()
 
 
 @main.command()
@@ -347,7 +344,11 @@ async def _create_s3_client(settings: Settings) -> ServerSession:
     path = url.path
     if path.startswith("/"):
         path = path[1:]
-    return aws_s3_client.S3Database(bucket_name=bucket, directory=path, credentials=credentials).open_client_session(
+    return await aws_s3_client.S3Database(
+        bucket_name=bucket,
+        directory=path,
+        credentials=credentials,
+    ).open_client_session(
         client_id_or_name=settings.client_id,
     )
 

@@ -1,17 +1,18 @@
+import contextlib
 import hashlib
-from contextlib import closing
-from datetime import datetime, timezone
-from typing import Iterable, List, Optional, Tuple, Type, TypeVar, Union
-from uuid import UUID, uuid4
 import logging
-import pydantic
+from contextlib import closing
+from datetime import datetime
+from typing import Iterable, List, Optional, Tuple, Type, TypeVar, Union, Dict
+from uuid import UUID, uuid4
 
 import boto3
+import aiobotocore.session
 import pydantic
 
 from . import misc, protocol
-from .protocol import Backup, BackupSession, BackupSessionConfig, ClientConfiguration, Directory, DirectoryDefResponse, \
-    FileReader, Inode
+from .protocol import (Backup, BackupSession, BackupSessionConfig, ClientConfiguration, Directory, DirectoryDefResponse,
+                       FileReader, Inode)
 
 _CLIENTS_PATH = "clients"
 _CLIENT_REFERENCE = "client-names"
@@ -27,26 +28,29 @@ _T = TypeVar("_T")
 logger = logging.getLogger(__name__)
 
 class Credentials(pydantic.BaseModel):
-    profile_name: Optional[str] = None
     region_name: Optional[str] = None
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
 
 
 
-class S3Database(protocol.BackupDatabase):
+class S3Database:
 
     min_upload_size = min(protocol.READ_SIZE, (1024 ** 2) * 5)
 
     def __init__(self, bucket_name: str, directory: str = "", credentials: Credentials = Credentials()):
-        super().__init__(self)
+        super().__init__()
         self._bucket_name = bucket_name
         self._prefix = directory + "/" if directory and directory[-1] != "/" else directory
         self._client = boto3.Session(**credentials.dict()).client("s3")
+        self._credentials = credentials
 
-    def open_client_session(self, client_id_or_name: str) -> protocol.ServerSession:
+    async def open_client_session(self, client_id_or_name: str) -> protocol.ServerSession:
         configuration = self.load_client_config(client_id_or_name)
-        return S3Session(self, configuration)
+        session = aiobotocore.session.get_session()
+        context_stack = contextlib.AsyncExitStack()
+        client = await context_stack.enter_async_context(session.create_client("s3", **self._credentials.dict()))
+        return S3Session(self, client, context_stack, configuration)
 
     def save_client_config(self, client_config: ClientConfiguration):
         file_location = f"{_CLIENTS_PATH}/{client_config.client_id}.json"
@@ -93,32 +97,11 @@ class S3Database(protocol.BackupDatabase):
         except pydantic.ValidationError as ex:
             raise protocol.InternalServerError(f"Corrupt corrupt json {file_key}") from ex
 
-    def put_json(self, file_key: str, body):
-        self.put_object(file_key, body.json().encode(protocol.ENCODING))
-
-    def put_object(self, file_key: str, body: bytes):
-        self._client.put_object(
-            Bucket=self._bucket_name,
-            Key=self._prefix + file_key,
-            Body=body,
-        )
-
-    def object_exists(self, file_key: str) -> bool:
-        try:
-            self._client.head_object(Bucket=self._bucket_name, Key=self._prefix + file_key)
-            return True
-        except self._client.exceptions.ClientError as ex:
-            if getattr(ex, "response", {}).get('Error', {}).get('Code', "") == "404":
-                return False
-            raise
-
-    def delete_objects(self, *keys: str):
-        objects_to_delete = [{'Key': self._prefix + key} for key in keys]
-        self._client.delete_objects(
-            Bucket=self._bucket_name,
-            Delete={'Objects': objects_to_delete},
-        )
-
+    def object_key(self, key_stub: str) -> Dict[str, str]:
+        return {
+            'Bucket': self._bucket_name,
+            'Key': self._prefix + key_stub,
+        }
 
     def iter_clients(self) -> Iterable[ClientConfiguration]:
         """
@@ -127,15 +110,20 @@ class S3Database(protocol.BackupDatabase):
         # TODO
         raise NotImplementedError()
 
+    def format_key(self, key: str) -> str:
+        return self._prefix + key
 
-class S3Session(protocol.ServerSession, closing):
 
-    def __init__(self, database: S3Database, client_config: ClientConfiguration):
-        super().__init__(self)
+class S3Session(protocol.ServerSession):
+
+    def __init__(self, database: S3Database, client, exit_stack: contextlib.AsyncExitStack, client_config: ClientConfiguration):
+        super().__init__()
         # The wrapper will run any calls in another thread allowing them to be awaited.
-        self._database = misc.AsyncThreadWrapper(database)
+        self._database = database
         self._client_config = client_config
         self._rate_limit = misc.FairSemaphore(2)
+        self._client = client
+        self._exit_stack = exit_stack
 
     @property
     def client_config(self) -> ClientConfiguration:
@@ -148,7 +136,7 @@ class S3Session(protocol.ServerSession, closing):
 
         if not allow_overwrite:
             final_location = f"{_BACKUPS}/{self._client_config.client_id}/{backup_date.isoformat()}"
-            if await self._database.object_exists(final_location):
+            if await self.object_exists(final_location):
                 raise protocol.DuplicateBackup(f"Backup exists {backup_date.isoformat()}")
 
         session_config = protocol.BackupSessionConfig(
@@ -161,12 +149,12 @@ class S3Session(protocol.ServerSession, closing):
         )
 
         session_location = f"{_BACKUP_SESSIONS}/{self._client_config.client_id}/{session_config.session_id}"
-        await self._database.put_json(session_location, session_config)
+        await self.put_json(session_location, session_config)
         return S3BackupSession(self, session_config)
 
     async def resume_backup(self, *, session_id: Optional[UUID] = None, backup_date: Optional[datetime] = None,
                             discard_partial_files: bool = False) -> BackupSession:
-        config = await self._database.read_json(
+        config = await self.read_json(
             f"{_BACKUP_SESSIONS}/{self._client_config.client_id}/{backup_date.isoformat()}",
             BackupSessionConfig,
         )
@@ -182,17 +170,59 @@ class S3Session(protocol.ServerSession, closing):
 
     async def get_backup(self, backup_date: Optional[datetime] = None) -> Optional[Backup]:
         try:
-            return await self._database.read_json(f"{_BACKUPS}/{self._client_config.client_id}/{backup_date.isoformat()}", Backup)
+            return await self.read_json(f"{_BACKUPS}/{self._client_config.client_id}/{backup_date.isoformat()}", Backup)
         except protocol.NotFoundException:
             return None
 
     async def get_directory(self, inode: Inode) -> Directory:
         assert inode.hash
-        return await self._database.read_json(f"{_DIRECTORIES}/{inode.hash}", Directory)
+        return await self.read_json(f"{_DIRECTORIES}/{inode.hash}", Directory)
 
     async def get_file(self, inode: Inode) -> Optional[FileReader]:
         # TODO
         raise NotImplementedError()
+
+    async def read_json(self, file_key: str, type_class: Type[_T]) -> _T:
+        try:
+            response = await self._client.get_object(**self._database.object_key(file_key))
+            with response['Body']:
+                content = response['Body'].read()
+            return type_class.parse_raw(content, encoding=protocol.ENCODING)
+        except self._client.exceptions.ClientError as ex:
+            if getattr(ex, "response", {}).get('Error', {}).get('Code', "") == "404":
+                raise protocol.NotFoundException(file_key)
+        except pydantic.ValidationError as ex:
+            raise protocol.InternalServerError(f"Corrupt corrupt json {file_key}") from ex
+
+    async def put_json(self, file_key: str, body):
+        await self.put_object(file_key, body.json().encode(protocol.ENCODING))
+
+    async def put_object(self, file_key: str, body: bytes):
+        await self._client.put_object(
+            **self._database.object_key(file_key),
+            Body=body,
+        )
+
+    async def object_exists(self, file_key: str) -> bool:
+        try:
+            await self._client.head_object(**self._database.object_key(file_key))
+            return True
+        except self._client.exceptions.ClientError as ex:
+            if getattr(ex, "response", {}).get('Error', {}).get('Code', "") == "404":
+                return False
+            raise
+
+    async def delete_objects(self, *keys: str):
+        if not keys:
+            return
+        objects_to_delete = [self._database.object_key(key) for key in keys]
+        bucket = objects_to_delete[0]['Bucket']
+        for key in objects_to_delete:
+            del key['Bucket']
+        await self._client.delete_objects(Bucket=bucket, Delete={'Objects': objects_to_delete})
+
+    async def close(self):
+        await self._exit_stack.aclose()
 
 
 class S3BackupSession(protocol.BackupSession):
@@ -203,6 +233,8 @@ class S3BackupSession(protocol.BackupSession):
         self._is_open = True
         self._partial_uploads = {}
         self._roots = {}
+        self._directory_existence_cache = {}
+        self._file_existence_cache = {}
 
     @property
     def config(self) -> BackupSessionConfig:
@@ -217,11 +249,14 @@ class S3BackupSession(protocol.BackupSession):
         return self._is_open
 
     async def directory_def(self, definition: Directory, replaces: Optional[UUID] = None) -> DirectoryDefResponse:
+        ref_hash, content = definition.hash()
+        if self._directory_existence_cache.get(ref_hash, None):
+            return DirectoryDefResponse(ref_hash=ref_hash)
         missing_files = [name for name, inode in definition.children.items() if not await self._inode_exists(inode)]
         if missing_files:
             return DirectoryDefResponse(missing_files=missing_files)
-        ref_hash, content = definition.hash()
-        await self._session._database.put_object(f"{_DIRECTORIES}/{ref_hash}", content)
+        await self._session.put_object(f"{_DIRECTORIES}/{ref_hash}", content)
+        self._directory_existence_cache[ref_hash] = True
         return DirectoryDefResponse(ref_hash=ref_hash)
 
     async def upload_file_content(self, file_content: Union[FileReader, bytes], resume_id: UUID,
@@ -241,6 +276,7 @@ class S3BackupSession(protocol.BackupSession):
                     offset += len(bytes_read)
             if is_complete:
                 result = await upload.complete()
+                self._file_existence_cache[result] = True
                 del self._partial_uploads[resume_id]
                 return result
             else:
@@ -264,20 +300,29 @@ class S3BackupSession(protocol.BackupSession):
             description=self._config.description,
         )
         file_key = f"{_BACKUPS}/{self._config.client_id}/{backup_record.backup_date.isoformat()}"
-        if not self._config.allow_overwrite and await self._session._database.object_exists(file_key):
+        if not self._config.allow_overwrite and await self._session.object_exists(file_key):
             raise protocol.DuplicateBackup()
-        await self._session._database.put_json(file_key, backup_record)
+        await self._session.put_json(file_key, backup_record)
         await self.discard()
         return backup_record
 
     async def discard(self) -> None:
         backup_session_path = f"{_BACKUP_SESSIONS}/{self._config.client_id}/{self._config.session_id}"
-        await self._session._database.delete_objects(backup_session_path)
+        await self._session.delete_objects(backup_session_path)
 
     async def _inode_exists(self, inode: Inode) -> bool:
-        look_in = _DIRECTORIES if inode.type is protocol.FileType.DIRECTORY else _FILES
+        if inode.type is protocol.FileType.DIRECTORY:
+            look_in = _DIRECTORIES
+            cache = self._directory_existence_cache
+        else:
+            look_in = _FILES
+            cache = self._file_existence_cache
+        if inode.hash in cache:
+            return cache[inode.hash]
         file_path = f"{look_in}/{inode.hash}"
-        return await self._session._database.object_exists(file_path)
+        result = await self._session.object_exists(file_path)
+        cache[inode.hash] = result
+        return result
 
 
 class S3MultipartUpload:
@@ -293,16 +338,15 @@ class S3MultipartUpload:
     _upload_id: Optional[str] = None
 
     def __init__(self, backup_session: S3BackupSession, resume_id: UUID):
-        self._database = backup_session._session._database
-        self._bucket = self._database._bucket_name
-        self._file_key = self._database._prefix + "/".join((
+        self._session = backup_session._session
+        self._file_key = self._session._database.object_key("/".join((
             _PARTIAL_UPLOADS,
             str(backup_session._config.client_id),
             str(backup_session._config.session_id),
             str(resume_id),
-        ))
+        )))
         self._upload_parts = []
-        self._client = misc.AsyncThreadWrapper(backup_session._session._database._client)
+        self._client = backup_session._session._client
 
     async def upload_part(self, position: int, content: bytes):
         total_content = self._upload_size + len(self._cache or bytes())
@@ -327,16 +371,12 @@ class S3MultipartUpload:
 
     async def _flush(self):
         if self._upload_id is None:
-            response = self._upload_id = await self._client.create_multipart_upload(
-                Bucket=self._bucket,
-                Key=self._file_key,
-            )
+            response = self._upload_id = await self._client.create_multipart_upload(**self._file_key)
             self._upload_id = response['UploadId']
 
         logger.debug("Uploading part %s - %s", len(self._upload_parts), self._upload_size + len(self._cache))
         response = await self._client.upload_part(
-            Bucket=self._bucket,
-            Key=self._file_key,
+            **self._file_key,
             UploadId=self._upload_id,
             PartNumber=len(self._upload_parts) + 1,
             Body=self._cache,
@@ -345,25 +385,23 @@ class S3MultipartUpload:
         self._upload_size += len(self._cache)
         del self._cache
 
-
     async def complete(self) -> str:
         ref_hash = self._hash.hexdigest()
         target_key = f"{_FILES}/{ref_hash}"
-        if await self._database.object_exists(target_key):
+        if await self._session.object_exists(target_key):
             await self.abort()
             return ref_hash
 
         if self._upload_id is None:
             # If we have not started a multipart upload then bypass that procedure and simply upload the object
-            await self._database.put_object(target_key, self._cache if self._cache is not None else b"")
+            await self._session.put_object(target_key, self._cache if self._cache is not None else b"")
             return ref_hash
 
         if self._cache is not None:
             await self._flush()
 
         await self._client.complete_multipart_upload(
-            Bucket=self._bucket,
-            Key=self._file_key,
+            **self._file_key,
             UploadId=self._upload_id,
             MultipartUpload={
                 'Parts': [
@@ -376,14 +414,10 @@ class S3MultipartUpload:
             },
         )
         await self._client.copy_object(
-            Bucket=self._bucket,
-            Key=f"{self._database._prefix}{_FILES}/{ref_hash}",
-            CopySource={'Bucket': self._bucket, 'Key': self._file_key},
+            **self._session._database.object_key(f"{_FILES}/{ref_hash}"),
+            CopySource=self._file_key,
         )
-        await self._client.delete_object(
-            Bucket=self._bucket,
-            Key=self._file_key,
-        )
+        await self._client.delete_object(**self._file_key)
         del self._upload_id
         # Cleanup internal state
         await self.abort()
@@ -392,11 +426,7 @@ class S3MultipartUpload:
 
     async def abort(self):
         if self._upload_id is not None:
-            await self._client.abort_multipart_upload(
-                Bucket=self._bucket,
-                Key=self._file_key,
-                UploadId=self._upload_id,
-            )
+            await self._client.abort_multipart_upload(**self._file_key, UploadId=self._upload_id)
             del self._upload_id
             self._upload_parts = []
             del self._upload_size

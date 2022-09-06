@@ -1,3 +1,4 @@
+import abc
 import asyncio
 import collections.abc
 import functools
@@ -221,43 +222,3 @@ async def gather_all_or_nothing(*futures: asyncio.Future):
             future.cancel()
         raise
     return result
-
-
-_T = TypeVar("_T")
-
-class AsyncThreadWrapper(Generic[_T]):
-
-    def __init__(self, object_to_wrap: _T, *, executor = None, dont_wrap: Collection[str] = ()):
-        self.__dict__['_object_to_wrap'] = object_to_wrap
-        self.__dict__['_executor'] = executor
-        self.__dict__['_protected'] = set(dont_wrap)
-
-        # do these in advance to prevent confusion over their existence
-        if hasattr(object_to_wrap, "__enter__"):
-            self.__dict__['__aenter__'] = self.__wrap(getattr(object_to_wrap, "__enter__"))
-        if hasattr(object_to_wrap, "__exit__"):
-            self.__dict__['__aexit__'] = self.__wrap(getattr(object_to_wrap, "__exit__"))
-
-    def __getattr__(self, item: str):
-        attribute = getattr(self._object_to_wrap, item)
-        # Don't wrap dunders. Python's internal mechanics would hate to get coroutine when it expected a method
-        if item.startswith("__") or item in self._protected or not hasattr(attribute, "__call__"):
-            return attribute
-        result = self.__wrap(attribute)
-        self.__dict__[item] = result
-        return result
-
-    def __setattr__(self, key: str, value: Any):
-        setattr(self._object_to_wrap, key, value)
-
-    def __wrap(self, attribute):
-        def wrapper(*args, **kwargs):
-            to_call = functools.partial(attribute, *args, **kwargs)
-            return asyncio.get_running_loop().run_in_executor(self._executor, to_call)
-        return wrapper
-
-    @staticmethod
-    async def call(function, *args, **kwargs) -> Any:
-        loop = asyncio.get_running_loop()
-        to_call = functools.partial(function, *args, **kwargs)
-        await loop.run_in_executor(None, to_call)

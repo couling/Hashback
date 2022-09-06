@@ -1,5 +1,4 @@
 {
   "database_url": "s3://hashback-couling/",
-  "client_id": "test-client",
-  "credentials": "client-credentials.json"
+  "client_id": "test-client"
 }

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import enum
 import functools
 import hashlib
@@ -403,42 +404,16 @@ class ServerSession(Protocol):
         :param inode: The handle to the file
         """
 
-    def close(self):
+    async def close(self):
         """
         Release any resources
         """
 
+    async def __aenter__(self):
+        return self
 
-class BackupDatabase(Protocol):
-    """
-    Represents a backup database.
-
-    Databases can open backup sessions but they differ subtally from other clients.  Databases presume there is direct
-    (admin) access and so do not require user authentication to access.  Elsewhere the ServerSession can only be
-    accessed with user credentials
-
-    So Databases are also the only way to make administrative changes
-    """
-
-    def open_client_session(self, client_id_or_name: str) -> "ServerSession":
-        """
-        Open a server session for a client
-        """
-
-    def save_client_config(self, client_config: ClientConfiguration) -> ServerSession:
-        """
-        Create a new
-        """
-
-    def iter_clients(self) -> Iterable[ClientConfiguration]:
-        """
-        Iterate over the clients configured in this DB
-        """
-
-    def load_client_config(self, client_id_or_name: str) -> ClientConfiguration:
-        """
-        Load client configuration for one client.
-        """
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
 
 
 class DirectoryExplorer(Protocol):
