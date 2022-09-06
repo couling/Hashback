@@ -121,7 +121,6 @@ class S3Session(protocol.ServerSession):
         # The wrapper will run any calls in another thread allowing them to be awaited.
         self._database = database
         self._client_config = client_config
-        self._rate_limit = misc.FairSemaphore(2)
         self._client = client
         self._exit_stack = exit_stack
 
@@ -261,26 +260,25 @@ class S3BackupSession(protocol.BackupSession):
 
     async def upload_file_content(self, file_content: Union[FileReader, bytes], resume_id: UUID,
                                   resume_from: Optional[int] = None, is_complete: bool = True) -> Optional[str]:
-        async with self._session._rate_limit:
-            if resume_id not in self._partial_uploads:
-                upload = S3MultipartUpload(self, resume_id)
-                self._partial_uploads[resume_id] = upload
-            else:
-                upload = self._partial_uploads[resume_id]
-            if isinstance(file_content, bytes):
-                await upload.upload_part(resume_from or 0, file_content)
-            else:
-                offset = 0
-                while bytes_read := await file_content.read(protocol.READ_SIZE):
-                    await upload.upload_part((resume_from or 0) + offset, bytes_read)
-                    offset += len(bytes_read)
-            if is_complete:
-                result = await upload.complete()
-                self._file_existence_cache[result] = True
-                del self._partial_uploads[resume_id]
-                return result
-            else:
-                return
+        if resume_id not in self._partial_uploads:
+            upload = S3MultipartUpload(self, resume_id)
+            self._partial_uploads[resume_id] = upload
+        else:
+            upload = self._partial_uploads[resume_id]
+        if isinstance(file_content, bytes):
+            await upload.upload_part(resume_from or 0, file_content)
+        else:
+            offset = 0
+            while bytes_read := await file_content.read(protocol.READ_SIZE):
+                await upload.upload_part((resume_from or 0) + offset, bytes_read)
+                offset += len(bytes_read)
+        if is_complete:
+            result = await upload.complete()
+            self._file_existence_cache[result] = True
+            del self._partial_uploads[resume_id]
+            return result
+        else:
+            return
 
     async def add_root_dir(self, root_dir_name: str, inode: Inode) -> None:
         self._roots[root_dir_name] = inode
