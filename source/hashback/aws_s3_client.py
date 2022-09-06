@@ -154,7 +154,7 @@ class S3Session(protocol.ServerSession):
     async def resume_backup(self, *, session_id: Optional[UUID] = None, backup_date: Optional[datetime] = None,
                             discard_partial_files: bool = False) -> BackupSession:
         config = await self.read_json(
-            f"{_BACKUP_SESSIONS}/{self._client_config.client_id}/{backup_date.isoformat()}",
+            f"{_BACKUP_SESSIONS}/{self._client_config.client_id}/{session_id}",
             BackupSessionConfig,
         )
         return S3BackupSession(self, config)
