@@ -184,8 +184,8 @@ class S3Session(protocol.ServerSession):
     async def read_json(self, file_key: str, type_class: Type[_T]) -> _T:
         try:
             response = await self._client.get_object(**self._database.object_key(file_key))
-            with response['Body']:
-                content = response['Body'].read()
+            async with response['Body']:
+                content = await response['Body'].read()
             return type_class.parse_raw(content, encoding=protocol.ENCODING)
         except self._client.exceptions.ClientError as ex:
             if getattr(ex, "response", {}).get('Error', {}).get('Code', "") == "404":
