@@ -7,6 +7,7 @@ from typing import Iterable, List, Optional, Tuple, Type, TypeVar, Union, Dict
 from uuid import UUID, uuid4
 
 import boto3
+import aiobotocore.config
 import aiobotocore.session
 import pydantic
 
@@ -38,18 +39,28 @@ class S3Database:
 
     min_upload_size = min(protocol.READ_SIZE, (1024 ** 2) * 5)
 
-    def __init__(self, bucket_name: str, directory: str = "", credentials: Credentials = Credentials()):
+    def __init__(self, bucket_name: str, directory: str = "", credentials: Credentials = Credentials(),
+                 boto_config: aiobotocore.config.AioConfig = None):
         super().__init__()
         self._bucket_name = bucket_name
         self._prefix = directory + "/" if directory and directory[-1] != "/" else directory
-        self._client = boto3.Session(**credentials.dict()).client("s3")
         self._credentials = credentials
+        self._boto_config = boto_config or aiobotocore.config.AioConfig(
+            connect_timeout=10,
+            retries={'max_attempts': 0}
+        )
+        self._client = boto3.Session(**credentials.dict()).client("s3", config=self._boto_config)
+
 
     async def open_client_session(self, client_id_or_name: str) -> protocol.ServerSession:
         configuration = self.load_client_config(client_id_or_name)
         session = aiobotocore.session.get_session()
         context_stack = contextlib.AsyncExitStack()
-        client = await context_stack.enter_async_context(session.create_client("s3", **self._credentials.dict()))
+        client = await context_stack.enter_async_context(session.create_client(
+            "s3",
+            **self._credentials.dict(),
+            config=self._boto_config,
+        ))
         return S3Session(self, client, context_stack, configuration)
 
     def save_client_config(self, client_config: ClientConfiguration):
