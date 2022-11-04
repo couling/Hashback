@@ -46,7 +46,7 @@ class S3Database:
         self._prefix = directory + "/" if directory and directory[-1] != "/" else directory
         self._credentials = credentials
         self._boto_config = boto_config or aiobotocore.config.AioConfig(
-            connect_timeout=10,
+            connect_timeout=60,
             retries={'max_attempts': 0}
         )
         self._client = boto3.Session(**credentials.dict()).client("s3", config=self._boto_config)
