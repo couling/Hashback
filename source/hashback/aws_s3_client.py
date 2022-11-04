@@ -426,10 +426,10 @@ class S3MultipartUpload:
             CopySource=self._file_key,
         )
         await self._client.delete_object(**self._file_key)
-        del self._upload_id
+        logger.debug("Completed %s with %s parts as %s", self._file_key, len(self._cache), ref_hash)
         # Cleanup internal state
+        del self._upload_id
         await self.abort()
-
         return ref_hash
 
     async def abort(self):

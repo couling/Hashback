@@ -230,8 +230,8 @@ class BackupController:
         Upload a file after the server has stated it does not already have a copy.
         """
         file_path = explorer.get_path(child_name)
-        logger.info(f"Uploading {file_path}")
         async with self._semaphore:
+            logger.info(f"Uploading {file_path}")
             with await explorer.open_child(child_name) as missing_file_content:
                 resume_id = uuid4()
                 new_hash = await self.backup_session.upload_file_content(
