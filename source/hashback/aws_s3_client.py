@@ -339,7 +339,7 @@ class S3MultipartUpload:
     _S3_MIN_LIMIT = (1024 ** 2) * 5
 
     # We don't want to chop other reads too much
-    min_upload_size = (1024 ** 2) * 20
+    min_upload_size = (1024 ** 2) * 10
     _cache: Union[bytearray, bytes] = None
     _hash = hashlib.sha256()
     _upload_size: int = 0
@@ -383,11 +383,13 @@ class S3MultipartUpload:
             response = self._upload_id = await self._client.create_multipart_upload(**self._file_key)
             self._upload_id = response['UploadId']
 
-        logger.debug("Uploading part %s - %s", len(self._upload_parts), self._upload_size + len(self._cache))
-        response = await self._client.upload_part(
+        part_num = len(self._upload_parts) + 1
+        response = await _run_on_thread(
+            self._client.upload_part,
+        logger.debug("Uploading part %s - %s - %s", part_num, self._upload_size + len(self._cache), self._file_key)
             **self._file_key,
             UploadId=self._upload_id,
-            PartNumber=len(self._upload_parts) + 1,
+            PartNumber=part_num,
             Body=self._cache,
         )
         self._upload_parts.append(response['ETag'])
@@ -414,10 +416,7 @@ class S3MultipartUpload:
             UploadId=self._upload_id,
             MultipartUpload={
                 'Parts': [
-                    {
-                        'PartNumber': num,
-                        'ETag': etag,
-                    }
+                    {'PartNumber': num, 'ETag': etag}
                     for num, etag in enumerate(self._upload_parts, start=1)
                 ]
             },
