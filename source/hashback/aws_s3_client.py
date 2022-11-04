@@ -426,7 +426,7 @@ class S3MultipartUpload:
             CopySource=self._file_key,
         )
         await self._client.delete_object(**self._file_key)
-        logger.debug("Completed %s with %s parts as %s", self._file_key, len(self._cache), ref_hash)
+        logger.debug("Completed %s with %s parts as %s", self._file_key, len(self._upload_parts), ref_hash)
         # Cleanup internal state
         del self._upload_id
         await self.abort()
@@ -440,7 +440,7 @@ class S3MultipartUpload:
             del self._upload_size
             del self._hash
         if self._cache is not None:
-            del self._cache
+            self._cache = None
 
 
 class S3FileReader(protocol.FileReader):
