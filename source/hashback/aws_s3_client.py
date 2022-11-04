@@ -375,7 +375,7 @@ class S3MultipartUpload:
 
         self._hash = new_hash
 
-        if len(content) >= max(self.min_upload_size, self._S3_MIN_LIMIT):
+        if len(self._cache) >= max(self.min_upload_size, self._S3_MIN_LIMIT):
             await self._flush()
 
     async def _flush(self):
