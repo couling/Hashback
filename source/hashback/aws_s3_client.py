@@ -384,9 +384,8 @@ class S3MultipartUpload:
             self._upload_id = response['UploadId']
 
         part_num = len(self._upload_parts) + 1
-        response = await _run_on_thread(
-            self._client.upload_part,
         logger.debug("Uploading part %s - %s - %s", part_num, self._upload_size + len(self._cache), self._file_key)
+        response = await self._client.upload_part(
             **self._file_key,
             UploadId=self._upload_id,
             PartNumber=part_num,
