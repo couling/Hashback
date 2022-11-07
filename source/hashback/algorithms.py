@@ -173,9 +173,9 @@ class BackupController:
         reject this if any or all children are missing from the server.  If that happens the server will respond
         with a list of missing children...  we then upload all missing children and try again.
         """
-        logger.debug(f"Uploading directory {explorer}")
         # The directory has changed.  We send the contents over to the server. It will tell us what else it needs.
         async with self._semaphore:
+            logger.debug(f"Uploading directory {explorer}")
             server_response = await self.backup_session.directory_def(directory.definition)
 
         if server_response.success:
