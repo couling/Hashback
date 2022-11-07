@@ -1,19 +1,18 @@
 import contextlib
 import hashlib
 import logging
-from contextlib import closing
 from datetime import datetime
-from typing import Iterable, List, Optional, Tuple, Type, TypeVar, Union, Dict
+from typing import AsyncIterable, Dict, Iterable, List, Optional, Tuple, Type, TypeVar, Union
 from uuid import UUID, uuid4
 
-import boto3
 import aiobotocore.config
 import aiobotocore.session
+import boto3
 import pydantic
 
-from . import misc, protocol
+from . import protocol
 from .protocol import (Backup, BackupSession, BackupSessionConfig, ClientConfiguration, Directory, DirectoryDefResponse,
-                       FileReader, Inode)
+                       FileReader, FileType, Inode)
 
 _CLIENTS_PATH = "clients"
 _CLIENT_REFERENCE = "client-names"
@@ -160,7 +159,9 @@ class S3Session(protocol.ServerSession):
 
         session_location = f"{_BACKUP_SESSIONS}/{self._client_config.client_id}/{session_config.session_id}"
         await self.put_json(session_location, session_config)
-        return S3BackupSession(self, session_config)
+        session = S3BackupSession(self, session_config)
+        await session.initialize()
+        return session
 
     async def resume_backup(self, *, session_id: Optional[UUID] = None, backup_date: Optional[datetime] = None,
                             discard_partial_files: bool = False) -> BackupSession:
@@ -168,7 +169,9 @@ class S3Session(protocol.ServerSession):
             f"{_BACKUP_SESSIONS}/{self._client_config.client_id}/{session_id}",
             BackupSessionConfig,
         )
-        return S3BackupSession(self, config)
+        session = S3BackupSession(self, config)
+        await session.initialize()
+        return session
 
     async def list_backup_sessions(self) -> List[BackupSessionConfig]:
         # TODO
@@ -243,8 +246,19 @@ class S3BackupSession(protocol.BackupSession):
         self._is_open = True
         self._partial_uploads = {}
         self._roots = {}
-        self._directory_existence_cache = {}
-        self._file_existence_cache = {}
+        self._directory_existence_cache = set()
+        self._file_existence_cache = set()
+
+    async def initialize(self):
+        # preread file list
+        async for key in _list_objects_in_dir(self._session._client, self._session._database._bucket_name,
+                                              self._session._database._prefix + _DIRECTORIES):
+            self._directory_existence_cache.add(key.split("/")[-1])
+        logger.debug("Directory existence: %s", len(self._directory_existence_cache))
+        async for key in _list_objects_in_dir(self._session._client, self._session._database._bucket_name,
+                                              self._session._database._prefix + _FILES):
+            self._file_existence_cache.add(key.split("/")[-1])
+        logger.debug("File existence: %s", len(self._file_existence_cache))
 
     @property
     def config(self) -> BackupSessionConfig:
@@ -260,13 +274,17 @@ class S3BackupSession(protocol.BackupSession):
 
     async def directory_def(self, definition: Directory, replaces: Optional[UUID] = None) -> DirectoryDefResponse:
         ref_hash, content = definition.hash()
-        if self._directory_existence_cache.get(ref_hash, None):
+        if self._inode_exists(FileType.DIRECTORY, ref_hash):
             return DirectoryDefResponse(ref_hash=ref_hash)
-        missing_files = [name for name, inode in definition.children.items() if not await self._inode_exists(inode)]
+        missing_files = [
+            name
+            for name, inode in definition.children.items()
+            if not self._inode_exists(inode.type, inode.hash)
+        ]
         if missing_files:
             return DirectoryDefResponse(missing_files=missing_files)
         await self._session.put_object(f"{_DIRECTORIES}/{ref_hash}", content)
-        self._directory_existence_cache[ref_hash] = True
+        self._directory_existence_cache.add(ref_hash)
         return DirectoryDefResponse(ref_hash=ref_hash)
 
     async def upload_file_content(self, file_content: Union[FileReader, bytes], resume_id: UUID,
@@ -285,7 +303,7 @@ class S3BackupSession(protocol.BackupSession):
                 offset += len(bytes_read)
         if is_complete:
             result = await upload.complete()
-            self._file_existence_cache[result] = True
+            self._file_existence_cache.add(result)
             del self._partial_uploads[resume_id]
             return result
         else:
@@ -319,23 +337,16 @@ class S3BackupSession(protocol.BackupSession):
         backup_session_path = f"{_BACKUP_SESSIONS}/{self._config.client_id}/{self._config.session_id}"
         await self._session.delete_objects(backup_session_path)
 
-    async def _inode_exists(self, inode: Inode) -> bool:
-        if inode.type is protocol.FileType.DIRECTORY:
-            look_in = _DIRECTORIES
+    def _inode_exists(self, file_type: FileType, ref_hash: str) -> bool:
+        if file_type is protocol.FileType.DIRECTORY:
             cache = self._directory_existence_cache
         else:
-            look_in = _FILES
             cache = self._file_existence_cache
-        if inode.hash in cache:
-            return cache[inode.hash]
-        file_path = f"{look_in}/{inode.hash}"
-        result = await self._session.object_exists(file_path)
-        cache[inode.hash] = result
-        return result
+        return ref_hash in cache
 
 
 class S3MultipartUpload:
-    # Lets make it difficult for someone to shoot themselves in the foot.  AWS has a 5MB minimum limit
+    # Let's make it difficult for someone to shoot themselves in the foot.  AWS has a 5MB minimum limit
     _S3_MIN_LIMIT = (1024 ** 2) * 5
 
     # We don't want to chop other reads too much
@@ -347,8 +358,8 @@ class S3MultipartUpload:
     _upload_id: Optional[str] = None
 
     def __init__(self, backup_session: S3BackupSession, resume_id: UUID):
-        self._session = backup_session._session
-        self._file_key = self._session._database.object_key("/".join((
+        self._session = backup_session
+        self._file_key = self._session._session._database.object_key("/".join((
             _PARTIAL_UPLOADS,
             str(backup_session._config.client_id),
             str(backup_session._config.session_id),
@@ -397,14 +408,13 @@ class S3MultipartUpload:
 
     async def complete(self) -> str:
         ref_hash = self._hash.hexdigest()
-        target_key = f"{_FILES}/{ref_hash}"
-        if await self._session.object_exists(target_key):
+        if self._session._inode_exists(FileType.REGULAR, ref_hash):
             await self.abort()
             return ref_hash
-
+        target_key = f"{_FILES}/{ref_hash}"
         if self._upload_id is None:
             # If we have not started a multipart upload then bypass that procedure and simply upload the object
-            await self._session.put_object(target_key, self._cache if self._cache is not None else b"")
+            await self._session._session.put_object(target_key, self._cache if self._cache is not None else b"")
             return ref_hash
 
         if self._cache is not None:
@@ -421,7 +431,7 @@ class S3MultipartUpload:
             },
         )
         await self._client.copy_object(
-            **self._session._database.object_key(f"{_FILES}/{ref_hash}"),
+            **self._session._session._database.object_key(f"{_FILES}/{ref_hash}"),
             CopySource=self._file_key,
         )
         await self._client.delete_object(**self._file_key)
@@ -439,7 +449,7 @@ class S3MultipartUpload:
             del self._upload_size
             del self._hash
         if self._cache is not None:
-            self._cache = None
+            del self._cache
 
 
 class S3FileReader(protocol.FileReader):
@@ -458,3 +468,20 @@ class S3FileReader(protocol.FileReader):
     @property
     def file_size(self) -> Optional[int]:
         return self._size
+
+
+async def _list_objects_in_dir(client, bucket: str, prefix: str) -> AsyncIterable[str]:
+    response = await client.list_objects_v2(
+        Bucket=bucket,
+        Prefix=prefix,
+    )
+    for item in response['Contents']:
+        yield item['Key']
+    while response['IsTruncated']:
+        response = await client.list_objects_v2(
+            Bucket=bucket,
+            Prefix=prefix,
+            ContinuationToken=response['NextContinuationToken']
+        )
+        for item in response['Contents']:
+            yield item['Key']
